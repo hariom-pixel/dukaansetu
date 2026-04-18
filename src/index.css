@@ -1,0 +1,167 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Friendly Retail ERP — warm, approachable, data-friendly */
+
+@layer base {
+  :root {
+    --background: 36 40% 98%;
+    --foreground: 25 30% 14%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 25 30% 14%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 25 30% 14%;
+
+    /* Warm terracotta brand */
+    --primary: 16 78% 52%;
+    --primary-foreground: 36 40% 98%;
+    --primary-glow: 22 92% 64%;
+
+    /* Soft cream secondary */
+    --secondary: 36 45% 94%;
+    --secondary-foreground: 25 30% 18%;
+
+    --muted: 32 25% 94%;
+    --muted-foreground: 25 12% 42%;
+
+    /* Warm gold accent */
+    --accent: 38 88% 56%;
+    --accent-foreground: 25 40% 14%;
+
+    --success: 152 52% 40%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 35 92% 52%;
+    --warning-foreground: 25 40% 14%;
+
+    --destructive: 0 72% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 30 20% 88%;
+    --input: 30 20% 90%;
+    --ring: 16 78% 52%;
+
+    --radius: 0.875rem;
+
+    /* Gradients */
+    --gradient-primary: linear-gradient(
+      135deg,
+      hsl(16 78% 52%),
+      hsl(22 92% 64%)
+    );
+    --gradient-warm: linear-gradient(135deg, hsl(38 88% 56%), hsl(16 78% 52%));
+    --gradient-cream: linear-gradient(180deg, hsl(36 45% 97%), hsl(32 35% 93%));
+    --gradient-success: linear-gradient(
+      135deg,
+      hsl(152 52% 40%),
+      hsl(165 55% 48%)
+    );
+
+    /* Shadows */
+    --shadow-soft: 0 2px 8px -2px hsl(25 30% 14% / 0.06),
+      0 1px 2px hsl(25 30% 14% / 0.04);
+    --shadow-card: 0 4px 16px -4px hsl(25 30% 14% / 0.08),
+      0 2px 4px hsl(25 30% 14% / 0.04);
+    --shadow-glow: 0 8px 32px -8px hsl(16 78% 52% / 0.35);
+    --shadow-elevated: 0 12px 40px -12px hsl(25 30% 14% / 0.18);
+
+    --transition-smooth: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Sidebar */
+    --sidebar-background: 25 30% 14%;
+    --sidebar-foreground: 36 30% 88%;
+    --sidebar-primary: 22 92% 64%;
+    --sidebar-primary-foreground: 25 40% 12%;
+    --sidebar-accent: 25 25% 20%;
+    --sidebar-accent-foreground: 36 40% 96%;
+    --sidebar-border: 25 20% 22%;
+    --sidebar-ring: 22 92% 64%;
+  }
+
+  .dark {
+    --background: 25 28% 10%;
+    --foreground: 36 30% 92%;
+    --card: 25 25% 13%;
+    --card-foreground: 36 30% 92%;
+    --popover: 25 25% 13%;
+    --popover-foreground: 36 30% 92%;
+    --primary: 22 92% 60%;
+    --primary-foreground: 25 40% 10%;
+    --secondary: 25 20% 18%;
+    --secondary-foreground: 36 30% 92%;
+    --muted: 25 20% 16%;
+    --muted-foreground: 32 15% 62%;
+    --accent: 38 88% 56%;
+    --accent-foreground: 25 40% 10%;
+    --destructive: 0 65% 48%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 25 18% 22%;
+    --input: 25 18% 22%;
+    --ring: 22 92% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5 {
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+    @apply tracking-tight;
+  }
+
+  .font-display {
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  }
+
+  .font-mono-num {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .bg-gradient-primary {
+    background-image: var(--gradient-primary);
+  }
+  .bg-gradient-warm {
+    background-image: var(--gradient-warm);
+  }
+  .bg-gradient-cream {
+    background-image: var(--gradient-cream);
+  }
+  .bg-gradient-success {
+    background-image: var(--gradient-success);
+  }
+  .shadow-soft {
+    box-shadow: var(--shadow-soft);
+  }
+  .shadow-card {
+    box-shadow: var(--shadow-card);
+  }
+  .shadow-glow {
+    box-shadow: var(--shadow-glow);
+  }
+  .shadow-elevated {
+    box-shadow: var(--shadow-elevated);
+  }
+  .transition-smooth {
+    transition: var(--transition-smooth);
+  }
+}
