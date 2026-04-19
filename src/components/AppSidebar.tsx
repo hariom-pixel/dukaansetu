@@ -69,10 +69,10 @@ export function AppSidebar() {
                   <NavLink
                     to={item.url}
                     end
-                    className={`flex items-center gap-3 px-3 transition-smooth ${
+                    className={`flex items-center gap-3 px-3 rounded-lg transition-smooth ${
                       active
-                        ? 'bg-gradient-primary text-sidebar-primary-foreground font-semibold shadow-glow'
-                        : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                        ? 'bg-primary text-primary-foreground font-semibold shadow-soft'
+                        : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                     }`}
                   >
                     <item.icon className='h-4 w-4 shrink-0' />
@@ -93,15 +93,15 @@ export function AppSidebar() {
     <Sidebar collapsible='icon' className='border-r-0'>
       <SidebarHeader className='border-b border-sidebar-border/50 py-4'>
         <div className='flex items-center gap-2 px-3'>
-          <div className='h-9 w-9 rounded-xl bg-gradient-warm flex items-center justify-center shadow-glow shrink-0'>
+          <div className='h-9 w-9 rounded-lg bg-primary flex items-center justify-center shrink-0'>
             <Store className='h-5 w-5 text-primary-foreground' />
           </div>
           {!collapsed && (
             <div className='leading-tight'>
-              <div className='font-display font-extrabold text-sidebar-foreground text-base'>
-                Kirana<span className='text-primary-glow'>.</span>OS
+              <div className='font-display font-bold text-sidebar-foreground text-base'>
+                ShopOS
               </div>
-              <div className='text-[10px] text-sidebar-foreground/50 uppercase tracking-widest'>
+              <div className='text-[10px] text-muted-foreground uppercase tracking-widest'>
                 Retail ERP
               </div>
             </div>

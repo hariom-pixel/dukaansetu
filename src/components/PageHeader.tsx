@@ -12,18 +12,18 @@ export function PageHeader({
   eyebrow?: string
 }) {
   return (
-    <div className='flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6'>
+    <div className='flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4 mb-6'>
       <div>
         {eyebrow && (
-          <div className='text-[11px] uppercase tracking-widest text-primary font-semibold mb-1.5'>
+          <div className='text-[11px] uppercase tracking-[0.12em] text-muted-foreground font-semibold mb-1'>
             {eyebrow}
           </div>
         )}
-        <h1 className='font-display text-2xl md:text-3xl font-extrabold tracking-tight text-foreground'>
+        <h1 className='font-display text-2xl md:text-[28px] font-bold tracking-tight text-foreground'>
           {title}
         </h1>
         {subtitle && (
-          <p className='text-muted-foreground text-sm mt-1 max-w-2xl'>
+          <p className='text-muted-foreground text-sm mt-1 max-w-3xl leading-6'>
             {subtitle}
           </p>
         )}

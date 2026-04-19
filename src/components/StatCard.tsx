@@ -17,25 +17,25 @@ export function StatCard({
   accent?: 'primary' | 'accent' | 'success' | 'warning'
 }) {
   const accentMap = {
-    primary: 'from-primary/15 to-primary/5 text-primary',
-    accent: 'from-accent/20 to-accent/5 text-accent',
-    success: 'from-success/15 to-success/5 text-success',
-    warning: 'from-warning/20 to-warning/5 text-warning',
+    primary: 'bg-primary/10 text-primary',
+    accent: 'bg-accent text-accent-foreground',
+    success: 'bg-success/10 text-success',
+    warning: 'bg-warning/10 text-warning',
   }
   const positive = (delta ?? 0) >= 0
   return (
-    <Card className='p-5 shadow-soft hover:shadow-card transition-smooth border-border/60 group'>
+    <Card className='p-5 shadow-soft border border-border bg-card hover:shadow-card transition-smooth'>
       <div className='flex items-start justify-between'>
         <div className='text-xs font-medium text-muted-foreground uppercase tracking-wider'>
           {label}
         </div>
         <div
-          className={`h-10 w-10 rounded-xl bg-gradient-to-br ${accentMap[accent]} flex items-center justify-center group-hover:scale-105 transition-smooth`}
+          className={`h-10 w-10 rounded-lg ${accentMap[accent]} flex items-center justify-center`}
         >
           <Icon className='h-5 w-5' />
         </div>
       </div>
-      <div className='mt-3 font-display text-2xl md:text-3xl font-extrabold text-foreground font-mono-num'>
+      <div className='mt-3 font-display text-[28px] font-bold text-foreground font-mono-num'>
         {value}
       </div>
       <div className='mt-2 flex items-center gap-2 text-xs'>

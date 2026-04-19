@@ -13,7 +13,7 @@ export default function AppLayout() {
       <div className='min-h-screen flex w-full bg-background'>
         <AppSidebar />
         <div className='flex-1 flex flex-col min-w-0'>
-          <header className='h-16 border-b border-border bg-card/80 backdrop-blur-md sticky top-0 z-30 flex items-center gap-3 px-4'>
+          <header className='sticky top-0 z-30 h-16 bg-background/95 backdrop-blur border-b border-border px-4 md:px-6 flex items-center gap-3'>
             <SidebarTrigger className='text-muted-foreground hover:text-foreground' />
             <div className='hidden md:flex items-center gap-2 flex-1 max-w-md'>
               <div className='relative w-full'>
@@ -31,14 +31,14 @@ export default function AppLayout() {
             <div className='flex items-center gap-2'>
               <Badge
                 variant='outline'
-                className='hidden sm:flex items-center gap-1.5 border-success/30 bg-success/10 text-success font-medium'
+                className='hidden sm:flex items-center gap-1.5 border-border bg-secondary text-foreground font-medium'
               >
-                <span className='h-1.5 w-1.5 rounded-full bg-success animate-pulse-soft' />
+                <span className='h-1.5 w-1.5 rounded-full bg-success' />
                 Live
               </Badge>
               <Button
                 size='sm'
-                className='bg-gradient-primary hover:opacity-90 shadow-glow gap-1.5 hidden sm:flex'
+                className='bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5 hidden sm:flex'
               >
                 <Plus className='h-4 w-4' /> New
               </Button>

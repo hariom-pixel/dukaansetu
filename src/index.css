@@ -8,79 +8,80 @@
 
 @layer base {
   :root {
-    --background: 36 40% 98%;
-    --foreground: 25 30% 14%;
+    --background: 220 20% 98%;
+    --foreground: 222 22% 16%;
 
     --card: 0 0% 100%;
-    --card-foreground: 25 30% 14%;
+    --card-foreground: 222 22% 16%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 25 30% 14%;
+    --popover-foreground: 222 22% 16%;
 
-    /* Warm terracotta brand */
-    --primary: 16 78% 52%;
-    --primary-foreground: 36 40% 98%;
-    --primary-glow: 22 92% 64%;
+    --primary: 221 83% 53%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 221 83% 60%;
 
-    /* Soft cream secondary */
-    --secondary: 36 45% 94%;
-    --secondary-foreground: 25 30% 18%;
+    --secondary: 220 16% 96%;
+    --secondary-foreground: 222 22% 16%;
 
-    --muted: 32 25% 94%;
-    --muted-foreground: 25 12% 42%;
+    --muted: 220 16% 96%;
+    --muted-foreground: 215 14% 46%;
 
-    /* Warm gold accent */
-    --accent: 38 88% 56%;
-    --accent-foreground: 25 40% 14%;
+    --accent: 221 83% 95%;
+    --accent-foreground: 221 83% 40%;
 
-    --success: 152 52% 40%;
+    --success: 142 71% 35%;
     --success-foreground: 0 0% 100%;
 
-    --warning: 35 92% 52%;
-    --warning-foreground: 25 40% 14%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 222 22% 16%;
 
     --destructive: 0 72% 52%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 30 20% 88%;
-    --input: 30 20% 90%;
-    --ring: 16 78% 52%;
+    --border: 220 14% 90%;
+    --input: 220 14% 92%;
+    --ring: 221 83% 53%;
 
-    --radius: 0.875rem;
+    --radius: 0.75rem;
 
-    /* Gradients */
     --gradient-primary: linear-gradient(
       135deg,
-      hsl(16 78% 52%),
-      hsl(22 92% 64%)
+      hsl(221 83% 53%),
+      hsl(221 83% 56%)
     );
-    --gradient-warm: linear-gradient(135deg, hsl(38 88% 56%), hsl(16 78% 52%));
-    --gradient-cream: linear-gradient(180deg, hsl(36 45% 97%), hsl(32 35% 93%));
+    --gradient-warm: linear-gradient(
+      135deg,
+      hsl(221 83% 53%),
+      hsl(215 85% 58%)
+    );
+    --gradient-cream: linear-gradient(
+      180deg,
+      hsl(220 20% 99%),
+      hsl(220 18% 97%)
+    );
     --gradient-success: linear-gradient(
       135deg,
-      hsl(152 52% 40%),
-      hsl(165 55% 48%)
+      hsl(142 71% 35%),
+      hsl(152 66% 42%)
     );
 
-    /* Shadows */
-    --shadow-soft: 0 2px 8px -2px hsl(25 30% 14% / 0.06),
-      0 1px 2px hsl(25 30% 14% / 0.04);
-    --shadow-card: 0 4px 16px -4px hsl(25 30% 14% / 0.08),
-      0 2px 4px hsl(25 30% 14% / 0.04);
-    --shadow-glow: 0 8px 32px -8px hsl(16 78% 52% / 0.35);
-    --shadow-elevated: 0 12px 40px -12px hsl(25 30% 14% / 0.18);
+    --shadow-soft: 0 1px 2px rgba(16, 24, 40, 0.04),
+      0 1px 3px rgba(16, 24, 40, 0.08);
+    --shadow-card: 0 4px 10px rgba(16, 24, 40, 0.06);
+    --shadow-glow: 0 10px 24px rgba(37, 99, 235, 0.14);
+    --shadow-elevated: 0 18px 40px rgba(16, 24, 40, 0.12);
 
-    --transition-smooth: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-smooth: all 0.2s ease;
 
-    /* Sidebar */
-    --sidebar-background: 25 30% 14%;
-    --sidebar-foreground: 36 30% 88%;
-    --sidebar-primary: 22 92% 64%;
-    --sidebar-primary-foreground: 25 40% 12%;
-    --sidebar-accent: 25 25% 20%;
-    --sidebar-accent-foreground: 36 40% 96%;
-    --sidebar-border: 25 20% 22%;
-    --sidebar-ring: 22 92% 64%;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222 22% 16%;
+    --sidebar-primary: 221 83% 53%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 16% 96%;
+    --sidebar-accent-foreground: 222 22% 16%;
+    --sidebar-border: 220 14% 90%;
+    --sidebar-ring: 221 83% 53%;
   }
 
   .dark {
@@ -112,7 +113,7 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
     font-family: 'Inter', system-ui, sans-serif;
     font-feature-settings: 'cv11', 'ss01';
   }
@@ -164,4 +165,25 @@
   .transition-smooth {
     transition: var(--transition-smooth);
   }
+}
+
+.erp-table th {
+  @apply text-[11px] uppercase tracking-wide text-muted-foreground font-semibold bg-secondary/60;
+}
+.erp-table td,
+.erp-table th {
+  @apply px-4 py-3 border-b border-border;
+}
+.erp-section-card {
+  @apply bg-card border border-border rounded-xl shadow-soft;
+}
+.erp-input {
+  @apply h-10 rounded-lg border-border bg-background;
+}
+
+select {
+  outline: none;
+}
+select:focus {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
 }

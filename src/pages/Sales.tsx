@@ -84,7 +84,7 @@ export default function Sales() {
         <StatCard label="Avg basket" value={fmtINR(avg)} icon={ShoppingCart} delta={+5} hint="per invoice" accent="accent" />
       </div>
 
-      <Card className="p-5 mb-4 shadow-soft border-border/60">
+      <Card className="p-5 mb-5 border border-border shadow-soft rounded-xl bg-card">
         <h3 className="font-display font-bold text-lg mb-4">Sales by channel · 7 days</h3>
         <ResponsiveContainer width="100%" height={280}>
           <BarChart data={data} margin={{ left: -20, right: 8 }}>
@@ -99,13 +99,13 @@ export default function Sales() {
         </ResponsiveContainer>
       </Card>
 
-      <Card className="shadow-soft border-border/60 overflow-hidden">
+      <Card className="border border-border shadow-soft rounded-xl bg-card overflow-hidden">
         <div className="p-5 border-b border-border">
           <h3 className="font-display font-bold text-lg">Invoices</h3>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-secondary/50">
+          <table className="w-full text-sm erp-table">
+            <thead className="bg-secondary/60">
               <tr className="text-xs text-muted-foreground uppercase tracking-wider">
                 <th className="text-left font-medium px-4 py-3">Invoice</th>
                 <th className="text-left font-medium px-4 py-3">Customer</th>

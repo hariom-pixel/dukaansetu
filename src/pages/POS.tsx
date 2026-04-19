@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ScanBarcode, Search, Plus, Minus, X, CreditCard, Wallet, Smartphone, Receipt, User, Percent, PauseCircle, PlayCircle, Printer, Share2 } from "lucide-react";
 import { POS_PRODUCTS, RECENT_INVOICES, fmtINR, type Product, type Invoice } from "@/lib/mockData";
+import {
+  type InvoiceTemplateKey,
+} from "@/lib/invoiceTemplates";
+import { openPrintWindow, shareReceiptText } from "@/lib/receiptActions";
 import { useLocalStore, useLocalObject, newId } from "@/hooks/useLocalStore";
 import { toast } from "sonner";
 
@@ -22,6 +26,10 @@ export default function POS() {
   const [activeHoldId, setActiveHoldId] = useState<string | null>(null);
   const [holdsOpen, setHoldsOpen] = useState(false);
   const [receipt, setReceipt] = useState<{ id: string; items: CartItem[]; subtotal: number; discount: number; tax: number; total: number; time: string } | null>(null);
+
+  const [template, setTemplate] = useState<InvoiceTemplateKey>("thermal");
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
 
   const filtered = products.items.filter(p =>
     p.name.toLowerCase().includes(query.toLowerCase()) || p.sku.toLowerCase().includes(query.toLowerCase())
@@ -93,41 +101,31 @@ export default function POS() {
   };
 
   const printReceipt = () => {
-    const w = window.open("", "_blank", "width=380,height=600");
-    if (!w || !receipt) return;
-    const rows = receipt.items.map(i => `<tr><td>${i.name}</td><td style="text-align:center">${i.qty}</td><td style="text-align:right">${fmtINR(i.price * i.qty)}</td></tr>`).join("");
-    w.document.write(`<!doctype html><html><head><title>${receipt.id}</title>
-      <style>body{font-family:ui-monospace,monospace;padding:16px;font-size:12px}h2{margin:0;text-align:center}table{width:100%;border-collapse:collapse;margin-top:12px}td,th{padding:4px 0;border-bottom:1px dashed #ccc}.totals{margin-top:12px}.totals div{display:flex;justify-content:space-between;padding:2px 0}.grand{font-weight:bold;font-size:14px;border-top:2px solid #000;padding-top:6px;margin-top:6px}</style>
-      </head><body>
-      <h2>Friendly Retail</h2>
-      <div style="text-align:center;font-size:11px;color:#666">Bandra · Drawer #2</div>
-      <div style="margin-top:8px;display:flex;justify-content:space-between"><span>${receipt.id}</span><span>${receipt.time}</span></div>
-      <table><thead><tr><th style="text-align:left">Item</th><th>Qty</th><th style="text-align:right">Amount</th></tr></thead><tbody>${rows}</tbody></table>
-      <div class="totals">
-        <div><span>Subtotal</span><span>${fmtINR(receipt.subtotal)}</span></div>
-        <div><span>Discount</span><span>- ${fmtINR(receipt.discount)}</span></div>
-        <div><span>GST</span><span>+ ${fmtINR(receipt.tax)}</span></div>
-        <div class="grand"><span>TOTAL</span><span>${fmtINR(receipt.total)}</span></div>
-      </div>
-      <p style="text-align:center;margin-top:16px;font-size:11px">Thank you! Visit again 🧡</p>
-      <script>window.onload=()=>{window.print();}</script>
-      </body></html>`);
-    w.document.close();
+    if (!receipt) return;
+    openPrintWindow(
+      {
+        ...receipt,
+       customer: {
+          name: "Walk-in",
+        },
+        gstMode: "with",
+        paymentMode: "UPI",
+      },
+      template
+    );
   };
+
 
   const shareReceipt = async () => {
     if (!receipt) return;
-    const text = `Receipt ${receipt.id}\n${receipt.items.map(i => `${i.name} x${i.qty} — ${fmtINR(i.price * i.qty)}`).join("\n")}\n\nTotal: ${fmtINR(receipt.total)}\n${receipt.time}`;
-    try {
-      if (navigator.share) {
-        await navigator.share({ title: receipt.id, text });
-      } else {
-        await navigator.clipboard.writeText(text);
-        toast.success("Receipt copied to clipboard");
-      }
-    } catch {
-      /* user cancelled */
-    }
+    await shareReceiptText({
+      ...receipt,
+      customer: {
+        name: "Walk-in",
+      },
+      gstMode: "with",
+      paymentMode: "UPI",
+    });
   };
 
   return (
@@ -150,16 +148,16 @@ export default function POS() {
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {/* Product picker */}
         <div className="lg:col-span-3 space-y-4">
-          <Card className="p-4 shadow-soft border-border/60">
+          <Card className="p-4 border border-border shadow-soft rounded-xl bg-card">
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <ScanBarcode className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-primary" />
                 <Input
                   autoFocus
-                  placeholder="Scan barcode or type product name…"
+                  placeholder="Search item or scan barcode"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  className="pl-11 h-12 text-base font-medium border-2 border-primary/20 focus-visible:border-primary rounded-xl"
+                  className="pl-11 h-11 text-sm font-medium border border-border focus-visible:ring-2 focus-visible:ring-primary/20 rounded-lg bg-background"
                 />
               </div>
               <Button size="lg" variant="outline" className="h-12 gap-1.5"><Search className="h-4 w-4" /> Browse</Button>
@@ -171,9 +169,9 @@ export default function POS() {
               <button
                 key={p.sku}
                 onClick={() => add(p)}
-                className="group text-left p-4 rounded-xl border border-border bg-card hover:border-primary hover:shadow-glow transition-smooth"
+                className="group text-left p-4 rounded-xl border border-border bg-card hover:bg-secondary/50 hover:border-primary transition-smooth"
               >
-                <div className="h-16 mb-3 rounded-lg bg-gradient-cream flex items-center justify-center">
+                <div className="h-14 mb-3 rounded-lg bg-secondary flex items-center justify-center">
                   <span className="font-display font-extrabold text-2xl text-primary/40">{p.name.slice(0,2).toUpperCase()}</span>
                 </div>
                 <div className="font-semibold text-sm leading-tight line-clamp-2 min-h-[2.5rem]">{p.name}</div>
@@ -188,8 +186,8 @@ export default function POS() {
 
         {/* Cart */}
         <div className="lg:col-span-2">
-          <Card className="shadow-elevated border-border/60 sticky top-20 overflow-hidden">
-            <div className="p-4 bg-gradient-warm text-primary-foreground">
+          <Card className="p-0 border border-border shadow-soft rounded-xl bg-card overflow-hidden">
+            <div className="p-4 bg-primary text-primary-foreground">
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-xs opacity-90 uppercase tracking-widest font-semibold">
@@ -205,13 +203,13 @@ export default function POS() {
 
             <div className="max-h-[320px] overflow-y-auto p-3 space-y-2">
               {cart.length === 0 && (
-                <div className="text-center py-12 text-muted-foreground text-sm">
+                <div className="text-center py-12 text-muted-foreground text-xs">
                   <Receipt className="h-10 w-10 mx-auto mb-2 opacity-30" />
                   Cart is empty. Start scanning items.
                 </div>
               )}
               {cart.map(i => (
-                <div key={i.sku} className="flex items-center gap-2 p-2 rounded-lg hover:bg-secondary/60 group">
+                <div key={i.sku} className="flex items-center gap-2 p-2 rounded-lg hover:bg-secondary/30 group">
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-sm truncate">{i.name}</div>
                     <div className="text-[11px] text-muted-foreground font-mono-num">{fmtINR(i.price)} × {i.qty}</div>
@@ -242,12 +240,12 @@ export default function POS() {
             <div className="p-4 border-t border-border space-y-2">
               <div className="grid grid-cols-3 gap-2">
                 <Button variant="outline" className="flex-col h-16 gap-1"><Wallet className="h-4 w-4" /><span className="text-[11px]">Cash</span></Button>
-                <Button variant="outline" className="flex-col h-16 gap-1 border-primary/40 bg-primary/5"><Smartphone className="h-4 w-4 text-primary" /><span className="text-[11px] font-semibold text-primary">UPI</span></Button>
+                <Button variant="outline" className="flex-col h-16 gap-1 border-primary bg-primary/10"><Smartphone className="h-4 w-4 text-primary" /><span className="text-[11px] font-semibold text-primary">UPI</span></Button>
                 <Button variant="outline" className="flex-col h-16 gap-1"><CreditCard className="h-4 w-4" /><span className="text-[11px]">Card</span></Button>
               </div>
               <Button
                 size="lg"
-                className="w-full h-12 bg-gradient-primary text-base font-display font-bold shadow-glow"
+                className="w-full h-12 bg-primary hover:bg-primary/90 text-primary-foreground text-base font-semibold"
                 onClick={charge}
               >
                 Charge {fmtINR(total)}
@@ -274,7 +272,7 @@ export default function POS() {
             {held.map(h => {
               const t = h.cart.reduce((s, i) => s + i.price * i.qty, 0);
               return (
-                <div key={h.id} className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-secondary/40">
+                <div key={h.id} className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-secondary/30">
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-sm">{h.id}</div>
                     <div className="text-xs text-muted-foreground">{h.cart.length} items · {h.createdAt}</div>
@@ -292,9 +290,29 @@ export default function POS() {
       {/* Receipt dialog with print/share */}
       <Dialog open={!!receipt} onOpenChange={(o) => !o && setReceipt(null)}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Receipt {receipt?.id}</DialogTitle></DialogHeader>
+          <DialogHeader>
+          <DialogTitle>Receipt {receipt?.id}</DialogTitle>
+        </DialogHeader>
+
+        <div className="flex items-center gap-2">
+          <div className="text-sm text-muted-foreground">Template</div>
+          <select
+            value={template}
+            onChange={(e) => setTemplate(e.target.value as InvoiceTemplateKey)}
+            className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+          >
+            <option value="thermal">Thermal</option>
+            <option value="gstClassic">GST Classic</option>
+            <option value="modern">Modern</option>
+            <option value="minimal">Minimal</option>
+          </select>
+        </div>
+          {/* <DialogHeader><DialogTitle>Receipt {receipt?.id}</DialogTitle></DialogHeader> */}
           {receipt && (
             <div className="space-y-3">
+              <div className="text-xs text-muted-foreground">
+                  Preview style: <span className="font-medium text-foreground">{template}</span>
+            </div>
               <div className="rounded-lg border border-border p-4 bg-secondary/30 font-mono text-xs">
                 <div className="text-center font-bold text-base mb-1">Friendly Retail</div>
                 <div className="text-center text-muted-foreground mb-3">Bandra · Drawer #2</div>
