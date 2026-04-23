@@ -1,4 +1,4 @@
-import { LucideIcon, TrendingUp, TrendingDown } from 'lucide-react'
+import { LucideIcon, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 
 export function StatCard({
@@ -17,44 +17,59 @@ export function StatCard({
   accent?: 'primary' | 'accent' | 'success' | 'warning'
 }) {
   const accentMap = {
-    primary: 'bg-primary/10 text-primary',
-    accent: 'bg-accent text-accent-foreground',
-    success: 'bg-success/10 text-success',
-    warning: 'bg-warning/10 text-warning',
+    primary: 'bg-primary/10 text-primary ring-1 ring-primary/10',
+    accent: 'bg-accent/15 text-accent-foreground ring-1 ring-accent/20',
+    success: 'bg-success/10 text-success ring-1 ring-success/10',
+    warning: 'bg-warning/10 text-warning ring-1 ring-warning/10',
   }
-  const positive = (delta ?? 0) >= 0
+
+  const deltaValue = Number((delta ?? 0).toFixed(1))
+  const positive = deltaValue > 0
+  const negative = deltaValue < 0
+  const neutral = deltaValue === 0
+
   return (
-    <Card className='p-5 shadow-soft border border-border bg-card hover:shadow-card transition-smooth'>
-      <div className='flex items-start justify-between'>
-        <div className='text-xs font-medium text-muted-foreground uppercase tracking-wider'>
-          {label}
+    <Card className='group p-5 border border-border/70 bg-card shadow-soft hover:shadow-card hover:-translate-y-[1px] transition-all duration-200'>
+      <div className='flex items-start justify-between gap-3'>
+        <div className='min-w-0'>
+          <div className='text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground'>
+            {label}
+          </div>
         </div>
+
         <div
-          className={`h-10 w-10 rounded-lg ${accentMap[accent]} flex items-center justify-center`}
+          className={`h-10 w-10 shrink-0 rounded-xl ${accentMap[accent]} flex items-center justify-center transition-transform duration-200 group-hover:scale-105`}
         >
           <Icon className='h-5 w-5' />
         </div>
       </div>
-      <div className='mt-3 font-display text-[28px] font-bold text-foreground font-mono-num'>
+
+      <div className='mt-3 font-display text-[30px] leading-none font-bold text-foreground font-mono-num tracking-tight'>
         {value}
       </div>
-      <div className='mt-2 flex items-center gap-2 text-xs'>
+
+      <div className='mt-3 flex items-center gap-2 flex-wrap text-xs'>
         {delta !== undefined && (
           <span
-            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-semibold ${
+            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold ${
               positive
                 ? 'bg-success/10 text-success'
-                : 'bg-destructive/10 text-destructive'
+                : negative
+                ? 'bg-destructive/10 text-destructive'
+                : 'bg-muted text-muted-foreground'
             }`}
           >
             {positive ? (
-              <TrendingUp className='h-3 w-3' />
+              <TrendingUp className='h-3.5 w-3.5' />
+            ) : negative ? (
+              <TrendingDown className='h-3.5 w-3.5' />
             ) : (
-              <TrendingDown className='h-3 w-3' />
+              <Minus className='h-3.5 w-3.5' />
             )}
-            {Math.abs(delta)}%
+            {Math.abs(deltaValue)}%
           </span>
         )}
+
         {hint && <span className='text-muted-foreground'>{hint}</span>}
       </div>
     </Card>

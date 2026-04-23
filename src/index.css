@@ -17,9 +17,9 @@
     --popover: 0 0% 100%;
     --popover-foreground: 222 22% 16%;
 
-    --primary: 221 83% 53%;
+    --primary: 217 91% 60%;
     --primary-foreground: 0 0% 100%;
-    --primary-glow: 221 83% 60%;
+    --primary-glow: 213 94% 68%;
 
     --secondary: 220 16% 96%;
     --secondary-foreground: 222 22% 16%;
@@ -27,8 +27,8 @@
     --muted: 220 16% 96%;
     --muted-foreground: 215 14% 46%;
 
-    --accent: 221 83% 95%;
-    --accent-foreground: 221 83% 40%;
+    --accent: 217 100% 96%;
+    --accent-foreground: 217 82% 42%;
 
     --success: 142 71% 35%;
     --success-foreground: 0 0% 100%;
@@ -41,19 +41,19 @@
 
     --border: 220 14% 90%;
     --input: 220 14% 92%;
-    --ring: 221 83% 53%;
+    --ring: 217 91% 60%;
 
     --radius: 0.75rem;
 
     --gradient-primary: linear-gradient(
       135deg,
-      hsl(221 83% 53%),
-      hsl(221 83% 56%)
+      hsl(217 91% 60%),
+      hsl(213 94% 68%)
     );
     --gradient-warm: linear-gradient(
       135deg,
-      hsl(221 83% 53%),
-      hsl(215 85% 58%)
+      hsl(217 91% 60%),
+      hsl(205 90% 64%)
     );
     --gradient-cream: linear-gradient(
       180deg,
@@ -69,19 +69,19 @@
     --shadow-soft: 0 1px 2px rgba(16, 24, 40, 0.04),
       0 1px 3px rgba(16, 24, 40, 0.08);
     --shadow-card: 0 4px 10px rgba(16, 24, 40, 0.06);
-    --shadow-glow: 0 10px 24px rgba(37, 99, 235, 0.14);
+    --shadow-glow: 0 10px 24px rgba(59, 130, 246, 0.18);
     --shadow-elevated: 0 18px 40px rgba(16, 24, 40, 0.12);
 
     --transition-smooth: all 0.2s ease;
 
     --sidebar-background: 0 0% 100%;
     --sidebar-foreground: 222 22% 16%;
-    --sidebar-primary: 221 83% 53%;
+    --sidebar-primary: 217 91% 60%;
     --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 220 16% 96%;
     --sidebar-accent-foreground: 222 22% 16%;
     --sidebar-border: 220 14% 90%;
-    --sidebar-ring: 221 83% 53%;
+    --sidebar-ring: 217 91% 60%;
   }
 
   .dark {
@@ -185,5 +185,20 @@ select {
   outline: none;
 }
 select:focus {
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.16);
+}
+
+button {
+  transition: all 0.15s ease;
+}
+
+input {
+  transition: all 0.15s ease;
+}
+
+input:focus,
+button:focus-visible,
+textarea:focus,
+select:focus {
+  outline: none;
 }

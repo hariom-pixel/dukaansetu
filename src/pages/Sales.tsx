@@ -14,6 +14,7 @@ import { RECENT_INVOICES, fmtINR, type Invoice } from "@/lib/mockData";
 import { useLocalStore, newId } from "@/hooks/useLocalStore";
 import { toast } from "sonner";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
+import { addStockLedgerEntry, createStockLedgerEntry } from "@/lib/stockLedger";
 
 const data = [
   { day: "Mon", pos: 92000, b2b: 50000, online: 28000 },
@@ -25,16 +26,55 @@ const data = [
   { day: "Sun", pos: 138000, b2b: 52000, online: 42000 },
 ];
 
+  type InvoicePayment = {
+    id: string;
+    date: string;
+    amount: number;
+    mode: string;
+  };
+
+  type InvoiceEx = Invoice & {
+    paidAmount?: number;
+    dueAmount?: number;
+    payments?: InvoicePayment[];
+    total?: number;
+    subtotal?: number;
+    discount?: number;
+    discountValue?: number;
+    discountType?: "percent" | "flat";
+    tax?: number;
+    gstRate?: number;
+    gstMode?: "with" | "without";
+    voidedAt?: string;
+    voidReason?: string;
+    items?: Array<{
+      sku: string;
+      name: string;
+      qty: number;
+      price: number;
+    }>;
+  };
+
 type Status = Invoice["status"];
 interface Form { customer: string; channel: string; amount: string; status: Status; }
 const empty: Form = { customer: "", channel: "POS", amount: "", status: "Paid" };
 
 export default function Sales() {
-  const { items, add, update, remove } = useLocalStore<Invoice>("erp.invoices", RECENT_INVOICES);
+  const { items, add, update, remove } = useLocalStore<InvoiceEx>("erp.invoices", RECENT_INVOICES as InvoiceEx[]);
+  const customersStore = useLocalStore<any>("erp.customers", []);
+  const journalStore = useLocalStore<any>("erp.journal", []);
+  const productsStore = useLocalStore<any>("erp.products", []);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Invoice | null>(null);
   const [form, setForm] = useState<Form>(empty);
-  const [confirmDel, setConfirmDel] = useState<Invoice | null>(null);
+  const [collecting, setCollecting] = useState<InvoiceEx | null>(null);
+  const [collectAmount, setCollectAmount] = useState("");
+  const [collectMode, setCollectMode] = useState("Cash");
+  const [viewing, setViewing] = useState<InvoiceEx | null>(null);
+  const [voiding, setVoiding] = useState<InvoiceEx | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [returning, setReturning] = useState<InvoiceEx | null>(null);
+  const [returnReason, setReturnReason] = useState("");
 
   const openAdd = () => { setEditing(null); setForm(empty); setOpen(true); };
   const openEdit = (i: Invoice) => { setEditing(i); setForm({ customer: i.customer, channel: i.channel, amount: String(i.amount), status: i.status }); setOpen(true); };
@@ -52,15 +92,278 @@ export default function Sales() {
     setOpen(false);
   };
 
-  const confirmDelete = () => {
-    if (!confirmDel) return;
-    remove(confirmDel.id);
-    toast.success(`${confirmDel.id} deleted`);
-    setConfirmDel(null);
+  const confirmVoid = () => {
+    if (!voiding) return;
+
+    if ((voiding.payments?.length || 0) > 0 && (voiding.dueAmount || 0) > 0) {
+      toast.error("Cannot void partially paid invoice");
+      return;
+    }
+
+    if (voiding.status === "Voided") {
+      toast.error("Invoice already voided");
+      return;
+    }
+
+    if (!voidReason.trim()) {
+      toast.error("Void reason required");
+      return;
+    }
+
+    // 1. restore stock
+    ;(voiding.items || []).forEach((item) => {
+      const product = productsStore.items.find((p: any) => p.sku === item.sku);
+      if (product) {
+        productsStore.update(product.id, {
+          stock: Number(product.stock || 0) + Number(item.qty || 0),
+        });
+
+        addStockLedgerEntry(
+          createStockLedgerEntry({
+            sku: item.sku,
+            productName: item.name,
+            qty: Number(item.qty || 0),
+            direction: "IN",
+            reason: "VOID",
+            refId: voiding.id,
+            note: `Void invoice ${voiding.id}`,
+          })
+        );
+      }
+    });
+
+    // 2. reverse customer outstanding only for pure credit dues
+    if ((voiding.dueAmount || 0) > 0) {
+      const customer = customersStore.items.find(
+        (c: any) => c.name === voiding.customer
+      );
+
+      if (customer) {
+        customersStore.update(customer.id, {
+          outstanding: Math.max(
+            Number(customer.outstanding || 0) - Number(voiding.dueAmount || 0),
+            0
+          ),
+          last: "Today",
+        });
+      }
+    }
+
+    // 3. reverse cash only if it was fully paid and had payment entries
+    if ((voiding.paidAmount || 0) > 0 && (voiding.dueAmount || 0) === 0) {
+      journalStore.add({
+        id: `J-${Date.now()}`,
+        date: new Date().toLocaleDateString(),
+        desc: `Void invoice ${voiding.id} · ${voiding.customer}`,
+        debit: Number(voiding.paidAmount || 0),
+        credit: 0,
+      });
+    }
+
+    // 4. mark invoice voided
+    update(voiding.id, {
+      status: "Voided" as any,
+      paidAmount: 0,
+      dueAmount: 0,
+      voidedAt: new Date().toISOString(),
+      voidReason: voidReason.trim(),
+    });
+
+    // 5. update viewer if open
+    if (viewing?.id === voiding.id) {
+      setViewing({
+        ...viewing,
+        status: "Voided" as any,
+        paidAmount: 0,
+        dueAmount: 0,
+        voidedAt: new Date().toISOString(),
+        voidReason: voidReason.trim(),
+      });
+    }
+
+    toast.success(`Invoice ${voiding.id} voided`);
+    setVoiding(null);
+    setVoidReason("");
   };
 
-  const net = items.reduce((s, i) => s + i.amount, 0);
-  const avg = items.length ? Math.round(net / items.length) : 0;
+  const collectInvoicePayment = () => {
+    if (!collecting) return;
+
+    const amount = Number(collectAmount) || 0;
+    if (amount <= 0) {
+      toast.error("Enter valid amount");
+      return;
+    }
+
+    const currentDue = collecting.dueAmount || 0;
+    const applied = Math.min(amount, currentDue);
+    const nextDue = Math.max(currentDue - applied, 0);
+    const nextPaid = (collecting.paidAmount || 0) + applied;
+
+    update(collecting.id, {
+      paidAmount: nextPaid,
+      dueAmount: nextDue,
+      status: nextDue === 0 ? "Paid" : "Credit",
+      payments: [
+        ...(collecting.payments || []),
+        {
+          id: `PAY-${Date.now()}`,
+          date: new Date().toLocaleDateString(),
+          amount: applied,
+          mode: collectMode,
+        },
+      ],
+    });
+
+    if (viewing?.id === collecting.id) {
+      setViewing({
+        ...viewing,
+        paidAmount: nextPaid,
+        dueAmount: nextDue,
+        status: nextDue === 0 ? "Paid" : "Credit",
+        payments: [
+          ...(viewing.payments || []),
+          {
+            id: `PAY-${Date.now()}`,
+            date: new Date().toLocaleDateString(),
+            amount: applied,
+            mode: collectMode,
+          },
+        ],
+      });
+    }
+
+    const customer = customersStore.items.find(
+      (c: any) => c.name === collecting.customer
+    );
+    if (customer) {
+      customersStore.update(customer.id, {
+        outstanding: Math.max((customer.outstanding || 0) - applied, 0),
+        last: "Today",
+      });
+    }
+
+    journalStore.add({
+      id: `J-${Date.now()}`,
+      date: new Date().toLocaleDateString(),
+      desc: `Invoice payment ${collecting.id} · ${collecting.customer}`,
+      debit: 0,
+      credit: applied,
+    });
+
+    toast.success(`Collected ${fmtINR(applied)} for ${collecting.id}`);
+    setCollecting(null);
+    setCollectAmount("");
+    setCollectMode("Cash");
+  };
+
+  const confirmReturn = () => {
+    if (!returning) return;
+
+    if (returning.status === "Returned") {
+      toast.error("Already returned");
+      return;
+    }
+
+    if (!returning.items || returning.items.length === 0) {
+      toast.error("No items found");
+      return;
+    }
+
+    if (!returnReason.trim()) {
+      toast.error("Return reason required");
+      return;
+    }
+
+    // 1. restore stock
+    returning.items.forEach((item: any) => {
+      const p = productsStore.items.find((x: any) => x.sku === item.sku);
+      if (p) {
+        productsStore.update(p.id, {
+          stock: Number(p.stock || 0) + Number(item.qty || 0),
+        });
+
+        addStockLedgerEntry(
+          createStockLedgerEntry({
+            sku: item.sku,
+            productName: item.name,
+            qty: Number(item.qty || 0),
+            direction: "IN",
+            reason: "RETURN",
+            refId: returning.id,
+            note: returnReason.trim(),
+          })
+        );
+      }
+    });
+
+    // 2. credit invoice case
+    if ((returning.dueAmount || 0) > 0) {
+      const customer = customersStore.items.find(
+        (c: any) => c.name === returning.customer
+      );
+
+      if (customer) {
+        customersStore.update(customer.id, {
+          outstanding: Math.max(
+            Number(customer.outstanding || 0) - Number(returning.amount || 0),
+            0
+          ),
+          last: "Today",
+        });
+      }
+
+      journalStore.add({
+        id: `J-${Date.now()}`,
+        date: new Date().toLocaleDateString(),
+        desc: `Return (credit) ${returning.id}`,
+        debit: 0,
+        credit: Number(returning.amount || 0),
+        type: "RETURN",
+        refId: returning.id,
+      });
+    }
+
+    // 3. paid invoice case
+    if ((returning.paidAmount || 0) > 0) {
+      journalStore.add({
+        id: `J-${Date.now()}`,
+        date: new Date().toLocaleDateString(),
+        desc: `Refund ${returning.id}`,
+        debit: Number(returning.paidAmount || 0),
+        credit: 0,
+        type: "REFUND",
+        refId: returning.id,
+      });
+    }
+
+    update(returning.id, {
+      status: "Returned" as any,
+      paidAmount: 0,
+      dueAmount: 0,
+      returnReason: returnReason.trim(),
+    });
+
+    if (viewing?.id === returning.id) {
+      setViewing({
+        ...viewing,
+        status: "Returned" as any,
+        paidAmount: 0,
+        dueAmount: 0,
+        returnReason: returnReason.trim(),
+      });
+    }
+
+    toast.success(`Invoice ${returning.id} returned`);
+    setReturning(null);
+    setReturnReason("");
+  };
+
+  const activeItems = items.filter((i: any) => i.status !== "Voided");
+
+  const net = activeItems.reduce((s, i) => s + Number(i.amount || 0), 0);
+  const avg = activeItems.length ? Math.round(net / activeItems.length) : 0;
+  const totalDue = activeItems.reduce((s, i) => s + Number(i.dueAmount || 0), 0);
 
   return (
     <>
@@ -72,15 +375,29 @@ export default function Sales() {
           <>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => toast.success("Returns flow opened")}><RotateCcw className="h-4 w-4" /> Returns</Button>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => toast.success("Exported")}><Download className="h-4 w-4" /> Export</Button>
-            <Button size="sm" className="bg-gradient-primary shadow-glow gap-1.5" onClick={openAdd}><Plus className="h-4 w-4" /> New invoice</Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => toast("Create invoice from POS screen")}
+            >
+              <Plus className="h-4 w-4" /> New invoice
+            </Button>
           </>
         }
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Invoices" value={String(items.length)} icon={Receipt} delta={+12} hint="all channels" accent="primary" />
+        <StatCard label="Invoices" value={String(activeItems.length)} icon={Receipt} delta={+12} hint="active invoices" accent="primary" />
         <StatCard label="Net sales" value={fmtINR(net)} icon={Banknote} delta={+17} hint="total" accent="success" />
-        <StatCard label="Returns" value={fmtINR(10500)} icon={RotateCcw} delta={-3} hint="this week" accent="warning" />
+        <StatCard
+          label="Invoice dues"
+          value={fmtINR(totalDue)}
+          icon={RotateCcw}
+          delta={-3}
+          hint="credit invoices"
+          accent="warning"
+        />
         <StatCard label="Avg basket" value={fmtINR(avg)} icon={ShoppingCart} delta={+5} hint="per invoice" accent="accent" />
       </div>
 
@@ -92,9 +409,9 @@ export default function Sales() {
             <XAxis dataKey="day" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
             <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `${v / 1000}k`} />
             <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 12, fontSize: 12 }} />
-            <Bar dataKey="pos" stackId="a" fill="hsl(16 78% 52%)" />
-            <Bar dataKey="b2b" stackId="a" fill="hsl(38 88% 56%)" />
-            <Bar dataKey="online" stackId="a" fill="hsl(152 52% 40%)" radius={[8, 8, 0, 0]} />
+            <Bar dataKey="pos" stackId="a" fill="hsl(217 91% 60%)" />
+            <Bar dataKey="b2b" stackId="a" fill="hsl(38 92% 50%)" />
+            <Bar dataKey="online" stackId="a" fill="hsl(168 76% 36%)" radius={[8, 8, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </Card>
@@ -111,6 +428,7 @@ export default function Sales() {
                 <th className="text-left font-medium px-4 py-3">Customer</th>
                 <th className="text-left font-medium px-4 py-3">Channel</th>
                 <th className="text-right font-medium px-4 py-3">Amount</th>
+                <th className="text-right font-medium px-4 py-3">Due</th>
                 <th className="text-left font-medium px-4 py-3">Status</th>
                 <th className="text-left font-medium px-4 py-3 hidden md:table-cell">Time</th>
                 <th className="text-right font-medium px-4 py-3">Actions</th>
@@ -118,27 +436,101 @@ export default function Sales() {
             </thead>
             <tbody>
               {items.map((inv) => (
-                <tr key={inv.id} className="border-t border-border hover:bg-secondary/30">
+                <tr key={inv.id} className="border-t border-border hover:bg-secondary/40 transition">
                   <td className="px-4 py-3 font-mono-num font-semibold text-primary">{inv.id}</td>
-                  <td className="px-4 py-3 font-medium">{inv.customer}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{inv.channel}</td>
-                  <td className="px-4 py-3 text-right font-mono-num font-bold">{fmtINR(inv.amount)}</td>
                   <td className="px-4 py-3">
-                    <Badge variant="outline" className={
-                      inv.status === "Paid" ? "bg-success/10 text-success border-success/30" :
-                        inv.status === "Pending" ? "bg-warning/10 text-warning border-warning/30" :
-                          "bg-accent/10 text-accent-foreground border-accent/30"
-                    }>{inv.status}</Badge>
+                    <div className="font-medium">{inv.customer}</div>
+                    <div className="text-xs text-muted-foreground">{inv.channel}</div>
                   </td>
-                  <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">{inv.time}</td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {inv.gstMode ? `GST ${inv.gstMode}` : inv.channel}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono-num font-bold">{fmtINR(inv.amount)}</td>
+                  <td className="px-4 py-3 text-right font-mono-num">
+                    {fmtINR(inv.dueAmount || 0)}
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge
+                      variant="outline"
+                      className={
+                        inv.status === "Paid"
+                          ? "bg-green-100 text-green-700 border-green-200"
+                          : inv.status === "Returned"
+                          ? "bg-slate-100 text-slate-700 border-slate-200"
+                          : inv.status === "Voided"
+                          ? "bg-slate-100 text-slate-700 border-slate-200"
+                          : inv.status === "Pending"
+                          ? "bg-yellow-100 text-yellow-700 border-yellow-200"
+                          : "bg-blue-100 text-blue-700 border-blue-200"
+                      }
+                    >
+                      {inv.status}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">{new Date(inv.time).toLocaleString()}</td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">
-                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEdit(inv)}><Pencil className="h-3.5 w-3.5" /></Button>
-                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setConfirmDel(inv)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                    <div className="flex justify-end items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        onClick={() => setViewing(inv)}
+                      >
+                        View
+                      </Button>
+
+                      {inv.status !== "Voided" && inv.status !== "Returned" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 text-xs text-warning"
+                          onClick={() => {
+                            setReturning(inv);
+                            setReturnReason("");
+                          }}
+                        >
+                          Return
+                        </Button>
+                      )}
+
+                      {inv.status !== "Voided" &&
+                        inv.status !== "Returned" &&
+                        (inv.dueAmount || 0) > 0 && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 text-xs"
+                            onClick={() => {
+                              setCollecting(inv);
+                              setCollectAmount(String(inv.dueAmount || 0));
+                              setCollectMode("Cash");
+                            }}
+                          >
+                            Collect
+                          </Button>
+                        )}
+
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 text-destructive"
+                        onClick={() => {
+                          if (inv.status === "Voided" || inv.status === "Returned") {
+                            toast.error("This invoice cannot be voided");
+                            return;
+                          }
+                          setVoiding(inv);
+                          setVoidReason("");
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
               {items.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-12 text-center text-muted-foreground text-sm">No invoices yet.</td></tr>
+                <tr><td colSpan={8} className="px-4 py-12 text-center text-muted-foreground text-sm">No invoices yet.</td></tr>
               )}
             </tbody>
           </table>
@@ -192,18 +584,371 @@ export default function Sales() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!confirmDel} onOpenChange={(o) => !o && setConfirmDel(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete {confirmDel?.id}?</AlertDialogTitle>
-            <AlertDialogDescription>This invoice will be removed permanently.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <Dialog open={!!collecting} onOpenChange={(o) => !o && setCollecting(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Collect payment</DialogTitle>
+            <DialogDescription>
+              {collecting?.id} · {collecting?.customer}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3 py-2">
+            <div className="rounded-lg border border-border bg-secondary/30 p-3 text-sm">
+              Outstanding:{" "}
+              <span className="font-mono-num font-semibold">
+                {fmtINR(collecting?.dueAmount || 0)}
+              </span>
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label>Amount</Label>
+              <Input
+                type="number"
+                value={collectAmount}
+                onChange={(e) => setCollectAmount(e.target.value)}
+              />
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label>Payment mode</Label>
+              <Select value={collectMode} onValueChange={setCollectMode}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Cash">Cash</SelectItem>
+                  <SelectItem value="UPI">UPI</SelectItem>
+                  <SelectItem value="Card">Card</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCollecting(null)}>
+              Cancel
+            </Button>
+            <Button onClick={collectInvoicePayment}>
+              Collect
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <div className="flex justify-between items-start">
+              <div>
+                <DialogTitle className="text-lg font-bold">
+                  {viewing?.id}
+                </DialogTitle>
+                <div className="text-sm text-muted-foreground mt-1">
+                  {viewing?.customer} · {new Date(viewing?.time || "").toLocaleString()}
+                </div>
+              </div>
+              <Badge
+                className={
+                  viewing?.status === "Voided" || viewing?.status === "Returned"
+                    ? "bg-slate-100 text-slate-700"
+                    : viewing?.dueAmount
+                    ? "bg-red-100 text-red-700"
+                    : "bg-green-100 text-green-700"
+                }
+              >
+                {viewing?.status === "Voided"
+                  ? "Voided"
+                  : viewing?.status === "Returned"
+                  ? "Returned"
+                  : viewing?.dueAmount
+                  ? "Due"
+                  : "Paid"}
+              </Badge>
+            </div>
+          </DialogHeader>
+
+          {viewing && (
+            <div className="grid gap-4 py-2">
+              <div className="grid grid-cols-2 gap-4">
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
+                    Customer
+                  </div>
+                  <div className="font-semibold text-sm">{viewing.customer}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    Channel: {viewing.channel}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Status: {viewing.status}
+                  </div>
+                  {viewing.status === "Voided" && (
+                    <div className="rounded-lg border border-border bg-secondary/30 p-3 text-sm">
+                      <div className="font-medium text-destructive">Invoice voided</div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {viewing.voidedAt ? new Date(viewing.voidedAt).toLocaleString() : ""}
+                      </div>
+                      {viewing.voidReason && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Reason: {viewing.voidReason}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </Card>
+
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
+                    Payment summary
+                  </div>
+                  <div className="space-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Amount</span>
+                      <span className="font-mono-num font-semibold">
+                        {fmtINR(viewing.amount)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Paid</span>
+                      <span className="font-mono-num">
+                        {fmtINR(viewing.paidAmount || 0)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Due</span>
+                      <span className={`font-mono-num font-semibold ${
+                        (viewing.dueAmount || 0) > 0
+                          ? "text-red-600"
+                          : "text-green-600"
+                      }`}>
+                        {fmtINR(viewing.dueAmount || 0)}
+                      </span>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+
+              <Card className="border border-border/60 shadow-none overflow-hidden">
+                <div className="p-4 border-b border-border">
+                  <h4 className="font-semibold text-sm">Invoice items</h4>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-secondary/50">
+                      <tr className="text-xs text-muted-foreground uppercase tracking-wider">
+                        <th className="text-left font-medium px-4 py-3">Item</th>
+                        <th className="text-right font-medium px-4 py-3">Qty</th>
+                        <th className="text-right font-medium px-4 py-3">Rate</th>
+                        <th className="text-right font-medium px-4 py-3">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewing.items && viewing.items.length > 0 ? (
+                        viewing.items.map((item: any, idx: number) => (
+                          <tr key={`${item.sku}-${idx}`} className="border-t border-border">
+                            <td className="px-4 py-3">
+                              <div className="font-medium">{item.name}</div>
+                              <div className="text-xs text-muted-foreground font-mono-num">
+                                {item.sku}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono-num">
+                              {item.qty}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono-num">
+                              {fmtINR(item.price)}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono-num font-semibold">
+                              {fmtINR(item.qty * item.price)}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-10 text-center text-muted-foreground text-sm">
+                            No item details stored for this invoice.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+
+              <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-3">
+                    Payment history
+                  </div>
+
+                  {viewing.payments && viewing.payments.length > 0 ? (
+                    <div className="space-y-2">
+                      {viewing.payments.map((p) => (
+                        <div
+                          key={p.id}
+                          className="flex items-center justify-between rounded-lg border border-border px-3 py-2"
+                        >
+                          <div>
+                            <div className="text-sm font-medium">{p.mode}</div>
+                            <div className="text-xs text-muted-foreground">{p.date}</div>
+                          </div>
+                          <div className="font-mono-num font-semibold">
+                            {fmtINR(p.amount)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-muted-foreground">
+                      No payment history yet.
+                    </div>
+                  )}
+                </Card>
+
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-3">
+                    Totals
+                  </div>
+
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Subtotal</span>
+                      <span className="font-mono-num">
+                        {fmtINR(viewing.subtotal || viewing.amount || 0)}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">
+                        Discount{" "}
+                        {viewing.discountType === "percent"
+                          ? `(${viewing.discountValue || 0}%)`
+                          : ""}
+                      </span>
+                      <span className="font-mono-num">
+                        - {fmtINR(viewing.discount || 0)}
+                      </span>
+                    </div>
+
+                    {(viewing.gstMode === "with" || viewing.tax) && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">
+                          GST ({viewing.gstRate || 0}%)
+                        </span>
+                        <span className="font-mono-num">
+                          + {fmtINR(viewing.tax || 0)}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between pt-3 mt-3 border-t border-border text-base font-bold">
+                      <span>Total</span>
+                      <span className="font-mono-num">
+                        {fmtINR(viewing.total || viewing.amount || 0)}
+                      </span>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewing(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!voiding} onOpenChange={(o) => !o && setVoiding(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Void invoice {voiding?.id}?</DialogTitle>
+            <DialogDescription>
+              This will restore stock and reverse linked balances where applicable.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3 py-2">
+            <div className="rounded-lg border border-border bg-secondary/30 p-3 text-sm">
+              Customer: <span className="font-medium">{voiding?.customer}</span>
+            </div>
+
+            <div className="rounded-lg border border-border bg-secondary/30 p-3 text-sm">
+              Amount: <span className="font-mono-num font-semibold">{fmtINR(voiding?.amount || 0)}</span>
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label>Reason</Label>
+              <Input
+                value={voidReason}
+                onChange={(e) => setVoidReason(e.target.value)}
+                placeholder="e.g. Billing mistake, duplicate invoice"
+              />
+            </div>
+
+            {(voiding?.payments?.length || 0) > 0 && (voiding?.dueAmount || 0) > 0 && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                Partially paid invoices cannot be voided yet.
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVoiding(null)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmVoid}
+            >
+              Void invoice
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!returning} onOpenChange={(o) => !o && setReturning(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Return invoice {returning?.id}?</DialogTitle>
+            <DialogDescription>
+              This will restore stock and reverse financial impact.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3 py-2">
+            <div className="text-sm">
+              Customer: <b>{returning?.customer}</b>
+            </div>
+
+            <div className="text-sm">
+              Amount: <b>{fmtINR(returning?.amount || 0)}</b>
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label>Reason</Label>
+              <Input
+                value={returnReason}
+                onChange={(e) => setReturnReason(e.target.value)}
+                placeholder="Damaged / wrong item / cancelled"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReturning(null)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-warning text-warning-foreground hover:bg-warning/90"
+              onClick={confirmReturn}
+            >
+              Confirm return
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

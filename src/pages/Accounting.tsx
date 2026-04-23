@@ -18,9 +18,18 @@ const empty: Form = { date: new Date().toLocaleDateString("en-GB", { day: "2-dig
 
 export default function Accounting() {
   const { items, add, remove } = useLocalStore<JournalEntry>("erp.journal", JOURNAL_SEED);
+  const invoicesStore = useLocalStore<any>("erp.invoices", []);
+
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<Form>(empty);
   const [confirmDel, setConfirmDel] = useState<JournalEntry | null>(null);
+
+  const suppliersStore = useLocalStore<any>("erp.suppliers", []);
+
+  const payables = suppliersStore.items.reduce(
+    (sum: number, s: any) => sum + (s.outstanding || 0),
+    0
+  );
 
   const ledger = useMemo(() => {
     let bal = 0;
@@ -39,12 +48,32 @@ export default function Accounting() {
 
   const confirmDelete = () => {
     if (!confirmDel) return;
+
+    const desc = String(confirmDel.desc || "");
+
+    if (
+      desc.includes("Sale") ||
+      desc.includes("Purchase") ||
+      desc.includes("Payment to") ||
+      desc.includes("Invoice payment") ||
+      desc.includes("Void invoice")
+    ) {
+      toast.error("System-generated entries cannot be deleted");
+      setConfirmDel(null);
+      return;
+    }
+
     remove(confirmDel.id);
     toast.success("Entry removed");
     setConfirmDel(null);
   };
 
   const cashPos = ledger.length ? ledger[ledger.length - 1].balance : 0;
+
+  const receivables = invoicesStore.items.reduce(
+    (sum: number, inv: any) => sum + (inv.dueAmount || 0),
+    0
+  );
 
   return (
     <>
@@ -61,8 +90,15 @@ export default function Accounting() {
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Receivables" value={fmtINR(318450)} icon={Wallet} delta={-3} hint="outstanding" accent="warning" />
-        <StatCard label="Payables" value={fmtINR(536500)} icon={Receipt} delta={+2} hint="due 30d" accent="primary" />
+        <StatCard
+          label="Receivables"
+          value={fmtINR(receivables)}
+          icon={Wallet}
+          delta={-3}
+          hint="invoice dues"
+          accent="warning"
+        />
+        <StatCard label="Payables" value={fmtINR(payables)} icon={Receipt} delta={+2} hint="due 30d" accent="primary" />
         <StatCard label="Cash position" value={fmtINR(cashPos)} icon={TrendingUp} delta={+8} hint="ledger balance" accent="success" />
         <StatCard label="Entries" value={String(items.length)} icon={FileText} delta={0} hint="this period" accent="accent" />
       </div>
@@ -89,7 +125,18 @@ export default function Accounting() {
                 {ledger.map((l) => (
                   <tr key={l.id} className="border-t border-border hover:bg-secondary/30 group">
                     <td className="px-4 py-3 text-muted-foreground text-xs font-mono-num">{l.date}</td>
-                    <td className="px-4 py-3 font-medium">{l.desc}</td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{l.desc}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {String(l.desc).toLowerCase().includes("payment")
+                          ? "Collection"
+                          : String(l.desc).toLowerCase().includes("sale")
+                          ? "Sale"
+                          : l.credit
+                          ? "Receipt"
+                          : "Purchase"}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-right font-mono-num text-destructive">{l.debit ? fmtINR(l.debit) : "—"}</td>
                     <td className="px-4 py-3 text-right font-mono-num text-success">{l.credit ? fmtINR(l.credit) : "—"}</td>
                     <td className="px-4 py-3 text-right font-mono-num font-bold">{fmtINR(l.balance)}</td>

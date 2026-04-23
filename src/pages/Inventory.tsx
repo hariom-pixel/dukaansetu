@@ -12,37 +12,108 @@ import { Package, Boxes, AlertTriangle, Clock, Search, Filter, Plus, Download, A
 import { POS_PRODUCTS, LOW_STOCK, EXPIRING, fmtINR, type Product } from "@/lib/mockData";
 import { useLocalStore } from "@/hooks/useLocalStore";
 import { toast } from "sonner";
+import { getStockLedger } from "@/lib/stockLedger";
 
-interface Form { sku: string; name: string; price: string; stock: string; }
-const empty: Form = { sku: "", name: "", price: "", stock: "" };
+type InventoryProduct = Product & {
+  barcode?: string;
+  reorderLevel?: number;
+};
+
+interface Form {
+  sku: string;
+  name: string;
+  barcode: string;
+  price: string;
+  reorderLevel: string;
+}
+
+const empty: Form = {
+  sku: "",
+  name: "",
+  barcode: "",
+  price: "",
+  reorderLevel: "20",
+};
 
 export default function Inventory() {
-  const { items: products, add, update, remove } = useLocalStore<Product>("erp.products", POS_PRODUCTS);
+  const { items: products, add, update, remove } = useLocalStore<InventoryProduct>("erp.products", POS_PRODUCTS as InventoryProduct[]);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState<Form>(empty);
   const [confirmDel, setConfirmDel] = useState<Product | null>(null);
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjusting, setAdjusting] = useState<InventoryProduct | null>(null);
+  const [adjustQty, setAdjustQty] = useState("");
+  const [adjustReason, setAdjustReason] = useState("");
 
   const filtered = products.filter((p) =>
-    [p.name, p.sku].some((s) => s.toLowerCase().includes(query.toLowerCase()))
+    [p.name, p.sku, p.barcode ?? ""].some((s) =>
+      s.toLowerCase().includes(query.toLowerCase())
+    )
   );
 
+  const liveReorderAlerts = products
+  .filter((p) => p.stock <= Number(p.reorderLevel ?? 20))
+  .sort((a, b) => a.stock - b.stock)
+  .slice(0, 6);
+
   const openAdd = () => { setEditing(null); setForm(empty); setOpen(true); };
-  const openEdit = (p: Product) => { setEditing(p); setForm({ sku: p.sku, name: p.name, price: String(p.price), stock: String(p.stock) }); setOpen(true); };
+  const openEdit = (p: InventoryProduct) => {
+    setEditing(p);
+    setForm({
+      sku: p.sku,
+      name: p.name,
+      barcode: p.barcode ?? "",
+      price: String(p.price),
+      reorderLevel: String(p.reorderLevel ?? 20),
+    });
+    setOpen(true);
+  };
+
+  const openAdjust = (p: InventoryProduct) => {
+    setAdjusting(p);
+    setAdjustQty("");
+    setAdjustReason("");
+    setAdjustOpen(true);
+  };
 
   const submit = () => {
-    if (!form.sku.trim() || !form.name.trim()) { toast.error("SKU and name required"); return; }
+    if (!form.sku.trim() || !form.name.trim()) {
+      toast.error("SKU and name required");
+      return;
+    }
+
     const price = Number(form.price) || 0;
-    const stock = Number(form.stock) || 0;
+    const reorderLevel = Number(form.reorderLevel) || 20;
+
     if (editing) {
-      update(editing.id, { sku: form.sku, name: form.name, price, stock });
+      update(editing.id, {
+        sku: form.sku,
+        name: form.name,
+        barcode: form.barcode.trim(),
+        price,
+        reorderLevel,
+      });
       toast.success("Product updated");
     } else {
-      if (products.some((p) => p.sku === form.sku)) { toast.error("SKU already exists"); return; }
-      add({ id: form.sku, sku: form.sku, name: form.name, price, stock });
+      if (products.some((p) => p.sku === form.sku)) {
+        toast.error("SKU already exists");
+        return;
+      }
+
+      add({
+        id: form.sku,
+        sku: form.sku,
+        name: form.name,
+        barcode: form.barcode.trim(),
+        price,
+        stock: 0,
+        reorderLevel,
+      });
       toast.success("Product added");
     }
+
     setOpen(false);
   };
 
@@ -53,8 +124,52 @@ export default function Inventory() {
     setConfirmDel(null);
   };
 
+  const submitAdjustment = () => {
+    if (!adjusting) return;
+
+    const qty = Number(adjustQty);
+    if (!qty) {
+      toast.error("Enter adjustment quantity");
+      return;
+    }
+
+    update(adjusting.id, {
+      stock: Math.max(0, adjusting.stock + qty),
+    });
+
+    // ADD STOCK LEDGER ENTRY
+    const { addStockLedgerEntry, createStockLedgerEntry } = require("@/lib/stockLedger");
+
+    addStockLedgerEntry(
+      createStockLedgerEntry({
+        sku: adjusting.sku,
+        productName: adjusting.name,
+        qty: Math.abs(qty),
+        direction: qty > 0 ? "IN" : "OUT",
+        reason: "ADJUSTMENT",
+        refId: adjusting.id,
+        note: adjustReason || "Manual adjustment",
+      })
+    );
+
+    toast.success(
+      `${adjusting.name} stock adjusted by ${qty > 0 ? "+" : ""}${qty}${
+        adjustReason ? ` · ${adjustReason}` : ""
+      }`
+    );
+
+    setAdjustOpen(false);
+    setAdjusting(null);
+    setAdjustQty("");
+    setAdjustReason("");
+  };
+
   const stockValue = products.reduce((s, p) => s + p.price * p.stock, 0);
-  const lowCount = products.filter((p) => p.stock < 40).length;
+  const stockLedger = getStockLedger().slice(0, 20);
+
+  const lowCount = products.filter(
+    (p) => p.stock <= Number(p.reorderLevel ?? 20)
+  ).length;
 
   return (
     <>
@@ -66,7 +181,7 @@ export default function Inventory() {
           <>
             <Button variant="outline" size="sm" className="gap-1.5"><ArrowRightLeft className="h-4 w-4" /> Transfer</Button>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => toast.success("Catalog exported")}><Download className="h-4 w-4" /> Export</Button>
-            <Button size="sm" className="bg-gradient-primary shadow-glow gap-1.5" onClick={openAdd}><Plus className="h-4 w-4" /> Add product</Button>
+            <Button size="sm" className="bg-primary hover:bg-primary/90 gap-1.5" onClick={openAdd}><Plus className="h-4 w-4" /> Add product</Button>
           </>
         }
       />
@@ -107,7 +222,7 @@ export default function Inventory() {
               </thead>
               <tbody>
                 {filtered.map((p) => {
-                  const low = p.stock < 40;
+                  const low = p.stock <= Number(p.reorderLevel ?? 20);
                   return (
                     <tr key={p.id} className="border-t border-border hover:bg-secondary/30">
                       <td className="px-4 py-3">
@@ -117,20 +232,50 @@ export default function Inventory() {
                           </div>
                           <div>
                             <div className="font-semibold">{p.name}</div>
-                            <div className="text-[11px] text-muted-foreground font-mono-num">{p.sku}</div>
+                            <div className="text-[11px] text-muted-foreground font-mono-num">
+                              {p.sku}
+                              {p.barcode ? ` · ${p.barcode}` : ""}
+                            </div>
                           </div>
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-mono-num font-semibold">{fmtINR(p.price)}</td>
-                      <td className={`px-4 py-3 text-right font-mono-num font-bold ${low ? "text-destructive" : ""}`}>{p.stock}</td>
+                      <td className={`px-4 py-3 text-right font-mono-num font-bold ${low ? "text-destructive" : ""}`}>
+                        <div>{p.stock}</div>
+                        <div className="text-[10px] text-muted-foreground font-normal">
+                          reorder {p.reorderLevel ?? 20}
+                        </div>
+                      </td>
                       <td className="px-4 py-3">
                         <Badge variant="outline" className={low ? "bg-warning/10 text-warning border-warning/30" : "bg-success/10 text-success border-success/30"}>
                           {low ? "Low" : "In stock"}
                         </Badge>
                       </td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
-                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEdit(p)}><Pencil className="h-3.5 w-3.5" /></Button>
-                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setConfirmDel(p)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 mr-2 text-xs"
+                          onClick={() => openAdjust(p)}
+                        >
+                          Adjust
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8"
+                          onClick={() => openEdit(p)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 text-destructive"
+                          onClick={() => setConfirmDel(p)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </td>
                     </tr>
                   );
@@ -149,16 +294,34 @@ export default function Inventory() {
               <AlertTriangle className="h-4 w-4 text-warning" /> Reorder alerts
             </h3>
             <div className="space-y-2">
-              {LOW_STOCK.map((p) => (
-                <div key={p.sku} className="p-3 rounded-lg bg-warning/5 border border-warning/20">
-                  <div className="font-semibold text-sm">{p.name}</div>
-                  <div className="text-xs text-muted-foreground mb-2">{p.branch}</div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Stock: <b className="text-destructive font-mono-num">{p.qty}</b> / {p.reorder}</span>
-                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => toast.success(`Reorder raised for ${p.name}`)}>Reorder</Button>
-                  </div>
+              {liveReorderAlerts.length === 0 ? (
+                <div className="text-sm text-muted-foreground">
+                  No reorder alerts right now.
                 </div>
-              ))}
+              ) : (
+                liveReorderAlerts.map((p) => (
+                  <div key={p.sku} className="p-3 rounded-lg bg-warning/5 border border-warning/20">
+                    <div className="font-semibold text-sm">{p.name}</div>
+                    <div className="text-xs text-muted-foreground mb-2">
+                      SKU: {p.sku}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">
+                        Stock: <b className="text-destructive font-mono-num">{p.stock}</b> /{" "}
+                        {p.reorderLevel ?? 20}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs"
+                        onClick={() => toast.success(`Reorder raised for ${p.name}`)}
+                      >
+                        Reorder
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </Card>
           <Card className="p-5 shadow-soft border-border/60">
@@ -180,6 +343,84 @@ export default function Inventory() {
         </div>
       </div>
 
+      <Card className="mt-6 shadow-soft border-border/60 overflow-hidden">
+        <div className="p-5 border-b border-border">
+          <h3 className="font-display font-bold text-lg">
+            Stock movement
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            Latest stock changes across sales, purchases and returns
+          </p>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/50">
+              <tr className="text-xs text-muted-foreground uppercase tracking-wider">
+                <th className="text-left px-4 py-3">Product</th>
+                <th className="text-center px-4 py-3">Type</th>
+                <th className="text-right px-4 py-3">Qty</th>
+                <th className="text-left px-4 py-3">Reason</th>
+                <th className="text-left px-4 py-3">Ref</th>
+                <th className="text-right px-4 py-3">Date</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {stockLedger.map((e) => (
+                <tr key={e.id} className="border-t border-border hover:bg-secondary/30">
+                  <td className="px-4 py-3">
+                    <div className="font-semibold">{e.productName}</div>
+                    <div className="text-[11px] text-muted-foreground font-mono-num">
+                      {e.sku}
+                    </div>
+                  </td>
+
+                  <td className="px-4 py-3 text-center">
+                    <Badge
+                      variant="outline"
+                      className={
+                        e.direction === "IN"
+                          ? "bg-success/10 text-success border-success/30"
+                          : "bg-destructive/10 text-destructive border-destructive/30"
+                      }
+                    >
+                      {e.direction}
+                    </Badge>
+                  </td>
+
+                  <td className="px-4 py-3 text-right font-mono-num font-bold">
+                    {e.direction === "OUT" ? "-" : "+"}
+                    {e.qty}
+                  </td>
+
+                  <td className="px-4 py-3 text-xs text-muted-foreground">
+                    {e.reason}
+                    {e.note ? ` · ${e.note}` : ""}
+                  </td>
+
+                  <td className="px-4 py-3 font-mono-num text-xs text-muted-foreground">
+                    {e.refId}
+                  </td>
+
+                  <td className="px-4 py-3 text-right text-xs text-muted-foreground">
+                    {e.date}
+                  </td>
+                </tr>
+              ))}
+
+              {stockLedger.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground text-sm">
+                    No stock activity yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
@@ -187,28 +428,109 @@ export default function Inventory() {
             <DialogDescription>{editing ? "Update product details." : "Add a new SKU to your catalog."}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 py-2">
+          <div className="grid gap-1.5">
+            <Label>SKU</Label>
+            <Input
+              value={form.sku}
+              onChange={(e) => setForm({ ...form, sku: e.target.value })}
+              placeholder="SKU-XXXX"
+              disabled={!!editing}
+            />
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label>Product name</Label>
+            <Input
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="e.g. Amul Milk 1L"
+            />
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label>Barcode</Label>
+            <Input
+              value={form.barcode}
+              onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+              placeholder="Optional barcode"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
-              <Label>SKU</Label>
-              <Input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} placeholder="SKU-XXXX" disabled={!!editing} />
+              <Label>Price (₹)</Label>
+              <Input
+                type="number"
+                value={form.price}
+                onChange={(e) => setForm({ ...form, price: e.target.value })}
+              />
             </div>
             <div className="grid gap-1.5">
-              <Label>Product name</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Amul Milk 1L" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-1.5">
-                <Label>Price (₹)</Label>
-                <Input type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Stock</Label>
-                <Input type="number" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} />
-              </div>
+              <Label>Reorder level</Label>
+              <Input
+                type="number"
+                value={form.reorderLevel}
+                onChange={(e) => setForm({ ...form, reorderLevel: e.target.value })}
+              />
             </div>
           </div>
+
+          {editing && (
+            <div className="rounded-lg border border-border bg-secondary/30 p-3 text-xs text-muted-foreground">
+              Current stock: <span className="font-mono-num font-semibold text-foreground">{editing.stock}</span>
+              <div className="mt-1">Use <b>Adjust</b> from the table to change stock quantity.</div>
+            </div>
+          )}
+        </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button className="bg-gradient-primary" onClick={submit}>{editing ? "Save changes" : "Add product"}</Button>
+            <Button className="bg-primary hover:bg-primary/90" onClick={submit}>{editing ? "Save changes" : "Add product"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Adjust stock</DialogTitle>
+            <DialogDescription>
+              Update stock quantity for {adjusting?.name}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3 py-2">
+            <div className="rounded-lg border border-border bg-secondary/30 p-3 text-sm">
+              Current stock:{" "}
+              <span className="font-mono-num font-semibold">
+                {adjusting?.stock ?? 0}
+              </span>
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label>Adjustment quantity</Label>
+              <Input
+                type="number"
+                value={adjustQty}
+                onChange={(e) => setAdjustQty(e.target.value)}
+                placeholder="Use +10 or -5"
+              />
+            </div>
+
+            <div className="grid gap-1.5">
+              <Label>Reason</Label>
+              <Input
+                value={adjustReason}
+                onChange={(e) => setAdjustReason(e.target.value)}
+                placeholder="Damaged, opening stock, manual count correction..."
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAdjustOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={submitAdjustment}>Apply adjustment</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -12,52 +12,69 @@ export default function AppLayout() {
     <SidebarProvider>
       <div className='min-h-screen flex w-full bg-background'>
         <AppSidebar />
-        <div className='flex-1 flex flex-col min-w-0'>
-          <header className='sticky top-0 z-30 h-16 bg-background/95 backdrop-blur border-b border-border px-4 md:px-6 flex items-center gap-3'>
-            <SidebarTrigger className='text-muted-foreground hover:text-foreground' />
-            <div className='hidden md:flex items-center gap-2 flex-1 max-w-md'>
-              <div className='relative w-full'>
-                <Search className='absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground' />
-                <Input
-                  placeholder='Search products, invoices, customers…'
-                  className='pl-9 bg-secondary/60 border-transparent focus-visible:bg-card h-10 rounded-xl'
-                />
-                <kbd className='hidden lg:inline-flex absolute right-2 top-1/2 -translate-y-1/2 items-center gap-1 text-[10px] text-muted-foreground bg-background px-1.5 py-0.5 rounded border border-border'>
-                  ⌘ K
-                </kbd>
+
+        <div className='flex-1 flex min-w-0 flex-col'>
+          <header className='sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur shadow-sm'>
+            <div className='flex h-16 items-center gap-3 px-4 md:px-6'>
+              <div className='flex items-center gap-2 shrink-0'>
+                <SidebarTrigger className='text-muted-foreground hover:text-foreground' />
+              </div>
+
+              <div className='hidden md:flex flex-1 justify-center min-w-0 px-2'>
+                <div className='relative w-full max-w-xl'>
+                  <Search className='absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
+                  <Input
+                    placeholder='Search products, invoices, customers…'
+                    className='h-10 rounded-xl border-border bg-background pl-9 pr-16 shadow-sm focus-visible:ring-2 focus-visible:ring-primary/20'
+                  />
+                  <kbd className='absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground lg:inline-flex'>
+                    ⌘ K
+                  </kbd>
+                </div>
+              </div>
+
+              <div className='md:hidden flex-1' />
+
+              <div className='flex items-center gap-2 shrink-0'>
+                <Badge
+                  variant='outline'
+                  className='hidden h-9 items-center gap-1.5 rounded-full border-border bg-secondary/60 px-3 text-foreground sm:flex'
+                >
+                  <span className='h-1.5 w-1.5 rounded-full bg-success' />
+                  Live
+                </Badge>
+
+                <Button
+                  size='sm'
+                  className='hidden h-9 rounded-full bg-primary px-4 text-primary-foreground shadow-sm hover:shadow-md transition-all sm:inline-flex'
+                >
+                  <Plus className='mr-1.5 h-4 w-4' />
+                  New
+                </Button>
+
+                <Button
+                  variant='ghost'
+                  size='icon'
+                  className='relative h-9 w-9 rounded-full hover:bg-secondary'
+                >
+                  <Bell className='h-5 w-5' />
+                  <span className='absolute right-2 top-2 h-2 w-2 rounded-full bg-primary ring-2 ring-background' />
+                </Button>
+
+                <button className='flex h-10 items-center gap-2 rounded-full border border-transparent pl-1 pr-2 transition-colors hover:border-border hover:bg-secondary/70 active:scale-95'>
+                  <Avatar className='h-8 w-8 ring-2 ring-primary/15'>
+                    <AvatarFallback className='bg-gradient-warm text-primary-foreground text-xs font-bold'>
+                      AK
+                    </AvatarFallback>
+                  </Avatar>
+                  <ChevronDown className='hidden h-4 w-4 text-muted-foreground sm:block' />
+                </button>
               </div>
             </div>
-            <div className='flex-1 md:hidden' />
-            <div className='flex items-center gap-2'>
-              <Badge
-                variant='outline'
-                className='hidden sm:flex items-center gap-1.5 border-border bg-secondary text-foreground font-medium'
-              >
-                <span className='h-1.5 w-1.5 rounded-full bg-success' />
-                Live
-              </Badge>
-              <Button
-                size='sm'
-                className='bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5 hidden sm:flex'
-              >
-                <Plus className='h-4 w-4' /> New
-              </Button>
-              <Button variant='ghost' size='icon' className='relative'>
-                <Bell className='h-5 w-5' />
-                <span className='absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-primary' />
-              </Button>
-              <button className='flex items-center gap-2 pl-2 pr-1 py-1 rounded-full hover:bg-secondary transition-smooth'>
-                <Avatar className='h-8 w-8 ring-2 ring-primary/20'>
-                  <AvatarFallback className='bg-gradient-warm text-primary-foreground text-xs font-bold'>
-                    AK
-                  </AvatarFallback>
-                </Avatar>
-                <ChevronDown className='h-4 w-4 text-muted-foreground hidden sm:block' />
-              </button>
-            </div>
           </header>
+
           <main className='flex-1 overflow-auto'>
-            <div className='p-4 md:p-6 lg:p-8 animate-fade-in'>
+            <div className='animate-fade-in p-4 md:p-6 lg:p-8'>
               <Outlet />
             </div>
           </main>

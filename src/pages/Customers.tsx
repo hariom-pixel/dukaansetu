@@ -26,15 +26,25 @@ type Loyalty = Customer["loyalty"];
 interface Form { name: string; visits: string; spent: string; loyalty: Loyalty; }
 const empty: Form = { name: "", visits: "0", spent: "0", loyalty: "Bronze" };
 
+type CustomerEx = Customer & {
+  phone?: string;
+  outstanding?: number;
+};
+
 export default function Customers() {
-  const { items, add, update, remove } = useLocalStore<Customer>("erp.customers", CUSTOMERS);
+  const { items, add, update, remove } = useLocalStore<CustomerEx>("erp.customers", CUSTOMERS as CustomerEx[]);
+  const journalStore = useLocalStore<any>("erp.journal", []);
+  const invoicesStore = useLocalStore<any>("erp.invoices", []);
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<Customer | null>(null);
+  const [editing, setEditing] = useState<CustomerEx | null>(null);
+  const [ledgerCustomer, setLedgerCustomer] = useState<any | null>(null);
+  const [profileCustomer, setProfileCustomer] = useState<CustomerEx | null>(null);
   const [form, setForm] = useState<Form>(empty);
-  const [confirmDel, setConfirmDel] = useState<Customer | null>(null);
+  const [confirmDel, setConfirmDel] = useState<CustomerEx | null>(null);
+  const [query, setQuery] = useState("");
 
   const openAdd = () => { setEditing(null); setForm(empty); setOpen(true); };
-  const openEdit = (c: Customer) => { setEditing(c); setForm({ name: c.name, visits: String(c.visits), spent: String(c.spent), loyalty: c.loyalty }); setOpen(true); };
+  const openEdit = (c: CustomerEx) => { setEditing(c); setForm({ name: c.name, visits: String(c.visits), spent: String(c.spent), loyalty: c.loyalty }); setOpen(true); };
 
   const submit = () => {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
@@ -52,6 +62,12 @@ export default function Customers() {
 
   const confirmDelete = () => {
     if (!confirmDel) return;
+
+    if ((confirmDel.outstanding || 0) > 0) {
+      toast.error("Cannot delete customer with outstanding dues");
+      return;
+    }
+
     remove(confirmDel.id);
     toast.success(`${confirmDel.name} removed`);
     setConfirmDel(null);
@@ -59,6 +75,109 @@ export default function Customers() {
 
   const totalSpent = items.reduce((s, c) => s + c.spent, 0);
   const avgLtv = items.length ? Math.round(totalSpent / items.length) : 0;
+
+  const filtered = items.filter((c) =>
+    c.name.toLowerCase().includes(query.toLowerCase())
+  );
+
+  const getLedger = (customerName: string) => {
+    const entries: any[] = [];
+
+    // 1. invoices
+    invoicesStore.items.forEach((inv: any) => {
+      if (inv.customer === customerName && inv.status !== "Voided") {
+        entries.push({
+          date: inv.time,
+          type: "Invoice",
+          ref: inv.id,
+          debit: inv.amount,
+          credit: 0,
+        });
+      }
+    });
+
+    // 2. payments
+    invoicesStore.items.forEach((inv: any) => {
+      if (inv.customer === customerName && inv.payments) {
+        inv.payments.forEach((p: any) => {
+          entries.push({
+            date: p.date,
+            type: "Payment",
+            ref: inv.id,
+            debit: 0,
+            credit: p.amount,
+          });
+        });
+      }
+    });
+
+    // 3. returns
+    invoicesStore.items.forEach((inv: any) => {
+      if (inv.customer === customerName && inv.status === "Returned") {
+        entries.push({
+          date: inv.time,
+          type: "Return",
+          ref: inv.id,
+          debit: 0,
+          credit: inv.amount,
+        });
+      }
+    });
+
+    // sort by date
+    entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // running balance
+    let balance = 0;
+
+    return entries.map((e) => {
+      balance += e.debit - e.credit;
+      return {
+        ...e,
+        balance,
+      };
+    });
+  };
+
+  const getCustomerInvoices = (customerName: string) => {
+  return [...invoicesStore.items]
+    .filter((inv: any) => inv.customer === customerName)
+    .sort(
+      (a: any, b: any) =>
+        new Date(String(b.time)).getTime() - new Date(String(a.time)).getTime()
+    );
+};
+
+  const collectFromCustomer = (customer: CustomerEx) => {
+    const raw = window.prompt(
+      `Collect amount from ${customer.name} (max ₹${customer.outstanding || 0})`,
+      String(customer.outstanding || 0)
+    );
+    if (!raw) return;
+
+    const amt = Number(raw) || 0;
+    if (amt <= 0) {
+      toast.error("Enter valid amount");
+      return;
+    }
+
+    const applied = Math.min(amt, customer.outstanding || 0);
+
+    update(customer.id, {
+      outstanding: Math.max((customer.outstanding || 0) - applied, 0),
+      last: "Today",
+    });
+
+    toast.success(`Collected ${fmtINR(applied)} from ${customer.name}`);
+
+    if (profileCustomer?.id === customer.id) {
+      setProfileCustomer({
+        ...customer,
+        outstanding: Math.max((customer.outstanding || 0) - applied, 0),
+        last: "Today",
+      });
+    }
+  };
 
   return (
     <>
@@ -77,38 +196,113 @@ export default function Customers() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Total customers" value={String(items.length)} icon={Users} delta={+8} hint="this month" accent="primary" />
         <StatCard label="Loyalty members" value={String(items.filter(c => c.loyalty !== "Bronze").length)} icon={Heart} delta={+14} hint="penetration" accent="accent" />
-        <StatCard label="Repeat rate" value="62%" icon={Sparkles} delta={+4} hint="vs last mo" accent="success" />
+        <StatCard
+          label="Outstanding"
+          value={fmtINR(items.reduce((s, c) => s + (c.outstanding || 0), 0))}
+          icon={Sparkles}
+          delta={+4}
+          hint="customer dues"
+          accent="success"
+        />
         <StatCard label="Avg LTV" value={fmtINR(avgLtv)} icon={Users} delta={+11} hint="per customer" accent="warning" />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {items.map((c) => (
-          <Card key={c.id} className="p-5 shadow-soft hover:shadow-card transition-smooth border-border/60 group">
-            <div className="flex items-start justify-between mb-3">
-              <Avatar className="h-12 w-12 ring-2 ring-primary/20">
-                <AvatarFallback className="bg-gradient-warm text-primary-foreground font-bold">{c.name.split(" ").map(n => n[0]).join("").slice(0, 2)}</AvatarFallback>
-              </Avatar>
-              <Badge className={`${tierColor[c.loyalty]} border-0 shadow-soft`}>{c.loyalty}</Badge>
-            </div>
-            <div className="font-display font-bold text-base">{c.name}</div>
-            <div className="text-[11px] text-muted-foreground font-mono-num mb-3">{c.id} · last visit {c.last}</div>
-            <div className="space-y-1.5 pt-3 border-t border-border">
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Lifetime spent</span>
-                <span className="font-mono-num font-bold">{fmtINR(c.spent)}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Visits</span>
-                <span className="font-mono-num font-semibold">{c.visits}</span>
-              </div>
-            </div>
-            <div className="flex gap-2 mt-3">
-              <Button size="sm" variant="outline" className="flex-1 text-xs gap-1" onClick={() => openEdit(c)}><Pencil className="h-3 w-3" /> Edit</Button>
-              <Button size="sm" variant="outline" className="text-xs text-destructive" onClick={() => setConfirmDel(c)}><Trash2 className="h-3 w-3" /></Button>
-            </div>
-          </Card>
-        ))}
-      </div>
+      <Card className="p-4 mb-4">
+        <Input
+          placeholder="Search customer name..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </Card>
+
+      <Card className="shadow-soft border-border/60 overflow-hidden">
+        <div className="p-5 border-b border-border">
+          <h3 className="font-display font-bold text-lg">Customers</h3>
+          <p className="text-xs text-muted-foreground">
+            Showing {filtered.length} customers
+          </p>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/50">
+              <tr className="text-xs text-muted-foreground uppercase">
+                <th className="px-4 py-3 text-left">Customer</th>
+                <th className="px-4 py-3 text-right">Spent</th>
+                <th className="px-4 py-3 text-right">Visits</th>
+                <th className="px-4 py-3 text-right">Outstanding</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {filtered.map((c) => (
+                <tr key={c.id} className="border-t hover:bg-secondary/30">
+                  <td className="px-4 py-3">
+                    <div className="font-semibold">{c.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {c.id} · {c.last}
+                    </div>
+                  </td>
+
+                  <td className="px-4 py-3 text-right font-mono-num">
+                    {fmtINR(c.spent)}
+                  </td>
+
+                  <td className="px-4 py-3 text-right font-mono-num">
+                    {c.visits}
+                  </td>
+
+                  <td className={`px-4 py-3 text-right font-mono-num ${
+                    (c.outstanding || 0) > 0 ? "text-destructive" : ""
+                  }`}>
+                    {fmtINR(c.outstanding || 0)}
+                  </td>
+
+                  <td className="px-4 py-3 text-right space-x-2">
+                    <Button size="sm" variant="outline" onClick={() => setLedgerCustomer(c)}>
+                      Ledger
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs"
+                      onClick={() => setProfileCustomer(c)}
+                    >
+                      Profile
+                    </Button>
+
+                    <Button size="sm" variant="outline" onClick={() => openEdit(c)}>
+                      Edit
+                    </Button>
+
+                    {(c.outstanding || 0) > 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs"
+                        onClick={() => collectFromCustomer(c)}
+                      >
+                        Collect total
+                      </Button>
+                    )}
+
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="text-destructive"
+                      onClick={() => setConfirmDel(c)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
@@ -147,6 +341,206 @@ export default function Customers() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
             <Button className="bg-gradient-primary" onClick={submit}>{editing ? "Save changes" : "Add customer"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!profileCustomer} onOpenChange={(o) => !o && setProfileCustomer(null)}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>{profileCustomer?.name} · Customer profile</DialogTitle>
+            <DialogDescription>
+              Full relationship view including sales, dues and activity
+            </DialogDescription>
+          </DialogHeader>
+
+          {profileCustomer && (
+            <div className="grid gap-4 py-2">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                    Loyalty
+                  </div>
+                  <div className="font-semibold text-sm">{profileCustomer.loyalty}</div>
+                </Card>
+
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                    Lifetime spent
+                  </div>
+                  <div className="font-mono-num font-bold text-sm">
+                    {fmtINR(profileCustomer.spent)}
+                  </div>
+                </Card>
+
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                    Visits
+                  </div>
+                  <div className="font-mono-num font-bold text-sm">
+                    {profileCustomer.visits}
+                  </div>
+                </Card>
+
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                    Outstanding
+                  </div>
+                  <div className={`font-mono-num font-bold text-sm ${(profileCustomer.outstanding || 0) > 0 ? "text-destructive" : ""}`}>
+                    {fmtINR(profileCustomer.outstanding || 0)}
+                  </div>
+                </Card>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {(profileCustomer.outstanding || 0) > 0 && (
+                  <Button
+                    variant="outline"
+                    onClick={() => collectFromCustomer(profileCustomer)}
+                  >
+                    Collect payment
+                  </Button>
+                )}
+
+                <Button
+                  variant="outline"
+                  onClick={() => setLedgerCustomer(profileCustomer)}
+                >
+                  Open ledger
+                </Button>
+
+                <Button
+                  variant="outline"
+                  onClick={() => openEdit(profileCustomer)}
+                >
+                  Edit customer
+                </Button>
+              </div>
+
+              <Card className="border border-border/60 shadow-none overflow-hidden">
+                <div className="p-4 border-b border-border">
+                  <h3 className="font-semibold text-sm">Recent invoices</h3>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-secondary/50">
+                      <tr className="text-xs uppercase text-muted-foreground">
+                        <th className="text-left px-4 py-3">Invoice</th>
+                        <th className="text-left px-4 py-3">Date</th>
+                        <th className="text-right px-4 py-3">Amount</th>
+                        <th className="text-right px-4 py-3">Due</th>
+                        <th className="text-left px-4 py-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {getCustomerInvoices(profileCustomer.name).length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                            No invoices found for this customer.
+                          </td>
+                        </tr>
+                      ) : (
+                        getCustomerInvoices(profileCustomer.name).map((inv: any) => (
+                          <tr key={inv.id} className="border-t border-border hover:bg-secondary/30">
+                            <td className="px-4 py-3 font-mono-num text-primary font-semibold">
+                              {inv.id}
+                            </td>
+                            <td className="px-4 py-3 text-xs text-muted-foreground">
+                              {inv.time ? new Date(String(inv.time)).toLocaleString() : "—"}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono-num">
+                              {fmtINR(inv.amount || 0)}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono-num">
+                              {fmtINR(inv.dueAmount || 0)}
+                            </td>
+                            <td className="px-4 py-3">
+                              <Badge
+                                variant="outline"
+                                className={
+                                  inv.status === "Paid"
+                                    ? "bg-success/10 text-success border-success/30"
+                                    : inv.status === "Credit"
+                                    ? "bg-accent/10 text-accent-foreground border-accent/30"
+                                    : inv.status === "Returned" || inv.status === "Voided"
+                                    ? "bg-muted text-muted-foreground border-border"
+                                    : "bg-warning/10 text-warning border-warning/30"
+                                }
+                              >
+                                {inv.status}
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProfileCustomer(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!ledgerCustomer} onOpenChange={(o) => !o && setLedgerCustomer(null)}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>
+              {ledgerCustomer?.name} · Ledger
+            </DialogTitle>
+            <DialogDescription>
+              Complete transaction history and balance
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-secondary/50">
+                <tr className="text-xs uppercase text-muted-foreground">
+                  <th className="text-left px-4 py-3">Date</th>
+                  <th className="text-left px-4 py-3">Type</th>
+                  <th className="text-left px-4 py-3">Ref</th>
+                  <th className="text-right px-4 py-3">Debit</th>
+                  <th className="text-right px-4 py-3">Credit</th>
+                  <th className="text-right px-4 py-3">Balance</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {ledgerCustomer &&
+                  getLedger(ledgerCustomer.name).map((e, i) => (
+                    <tr key={i} className="border-t border-border">
+                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                        {new Date(e.date).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-3">{e.type}</td>
+                      <td className="px-4 py-3 font-mono-num text-xs">{e.ref}</td>
+                      <td className="px-4 py-3 text-right font-mono-num">
+                        {e.debit ? fmtINR(e.debit) : "-"}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono-num">
+                        {e.credit ? fmtINR(e.credit) : "-"}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono-num font-bold">
+                        {fmtINR(e.balance)}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLedgerCustomer(null)}>
+              Close
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
