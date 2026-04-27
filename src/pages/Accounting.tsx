@@ -33,7 +33,32 @@ export default function Accounting() {
 
   const ledger = useMemo(() => {
     let bal = 0;
-    return items.map((l) => { bal += l.credit - l.debit; return { ...l, balance: bal }; });
+
+    return items.map((l: any) => {
+      const desc = String(l.desc || "").toLowerCase();
+      const type = String(l.type || "").toUpperCase();
+
+      const credit = Number(l.credit || 0);
+      const debit = Number(l.debit || 0);
+
+      const isCashIn =
+        desc.includes("sale") ||
+        desc.includes("invoice payment") ||
+        type === "SALE" ||
+        type === "PAYMENT";
+
+      const isCashOut =
+        desc.includes("refund") ||
+        desc.includes("payment to") ||
+        desc.includes("void invoice") ||
+        type === "REFUND" ||
+        type === "SUPPLIER_PAYMENT";
+
+      if (isCashIn) bal += credit;
+      else if (isCashOut) bal -= debit + credit;
+
+      return { ...l, balance: bal };
+    });
   }, [items]);
 
   const submit = () => {

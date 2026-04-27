@@ -1,4 +1,5 @@
-import { useMemo } from 'react'
+import { useMemo, useState} from 'react'
+import { toast } from 'sonner'
 import { PageHeader } from '@/components/PageHeader'
 import { StatCard } from '@/components/StatCard'
 import { Card } from '@/components/ui/card'
@@ -6,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Input } from '@/components/ui/input'
 import {
   Banknote,
   ShoppingBag,
@@ -17,6 +19,7 @@ import {
   Sparkles,
   ArrowUpRight,
   Clock,
+  ChevronLeft,
 } from 'lucide-react'
 import {
   Area,
@@ -47,7 +50,13 @@ export default function Dashboard() {
   const invoices = useLocalStore<Invoice>('erp.invoices', [])
   const journal = useLocalStore<any>('erp.journal', [])
 
-  const today = useMemo(() => new Date(), [])
+  const [datePickerOpen, setDatePickerOpen] = useState(false)
+  const [selectedDate, setSelectedDate] = useState(
+    new Date().toISOString().slice(0, 10)
+  )
+  const [calendarMonth, setCalendarMonth] = useState(new Date())
+
+  const today = useMemo(() => new Date(selectedDate), [selectedDate])
 
   const activeInvoices = useMemo(() => {
     return invoices.items.filter((inv: any) => inv.status !== 'Voided')
@@ -123,10 +132,31 @@ export default function Dashboard() {
   const trend = yesterdaySales === 0 ? todaySales > 0 ? 100 : 0 : ((todaySales - yesterdaySales) / yesterdaySales) * 100
 
   const cashInHand = useMemo(() => {
-    return journal.items.reduce(
-      (sum, entry) => sum + Number(entry.credit || 0) - Number(entry.debit || 0),
-      0
-    )
+    return journal.items.reduce((sum, entry: any) => {
+      const desc = String(entry.desc || "").toLowerCase()
+      const type = String(entry.type || "").toUpperCase()
+
+      const credit = Number(entry.credit || 0)
+      const debit = Number(entry.debit || 0)
+
+      const isCashIn =
+        desc.includes("sale") ||
+        desc.includes("invoice payment") ||
+        type === "SALE" ||
+        type === "PAYMENT"
+
+      const isCashOut =
+        desc.includes("refund") ||
+        desc.includes("payment to") ||
+        desc.includes("void invoice") ||
+        type === "REFUND" ||
+        type === "SUPPLIER_PAYMENT"
+
+      if (isCashIn) return sum + credit
+      if (isCashOut) return sum - debit - credit
+
+      return sum
+    }, 0)
   }, [journal.items])
 
   const onlineOrders = useMemo(() => {
@@ -248,6 +278,70 @@ export default function Dashboard() {
   const onlineHint = `${onlineOrders} online invoices`
   const outstandingHint = `${creditInvoicesCount} credit invoices`
 
+  const exportDashboard = () => {
+    const rows = [
+      ['Metric', 'Value'],
+      ["Today's Sales", todaySales],
+      ['Cash in Hand', cashInHand],
+      ['Online Orders', onlineOrders],
+      ['Outstanding', outstanding],
+      ['Paid Invoices', paidInvoicesCount],
+      ['Credit Invoices', creditInvoicesCount],
+      ['Low Stock Items', lowStockCount],
+    ]
+
+    const csv = rows.map((r) => r.join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `dashboard-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+
+    URL.revokeObjectURL(url)
+    toast.success('Dashboard exported')
+  }
+
+  const monthLabel = calendarMonth.toLocaleDateString(undefined, {
+    month: 'long',
+    year: 'numeric',
+  })
+
+  const calendarDays = useMemo(() => {
+    const year = calendarMonth.getFullYear()
+    const month = calendarMonth.getMonth()
+
+    const firstDay = new Date(year, month, 1)
+    const lastDay = new Date(year, month + 1, 0)
+    const startOffset = firstDay.getDay()
+
+    const days: Array<Date | null> = []
+
+    for (let i = 0; i < startOffset; i++) {
+      days.push(null)
+    }
+
+    for (let d = 1; d <= lastDay.getDate(); d++) {
+      days.push(new Date(year, month, d))
+    }
+
+    return days
+  }, [calendarMonth])
+
+  const toDateInputValue = (date: Date) => {
+    const y = date.getFullYear()
+    const m = String(date.getMonth() + 1).padStart(2, '0')
+    const d = String(date.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
+
+  const selectedDateLabel = today.toLocaleDateString(undefined, {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  })
+
   return (
     <>
       <PageHeader
@@ -256,12 +350,131 @@ export default function Dashboard() {
         subtitle="Here's how your business is performing across 5 branches today."
         actions={
           <>
-            <Button variant='outline' size='sm' className='gap-1.5'>
-              <Calendar className='h-4 w-4' /> Today
-            </Button>
-            <Button variant='outline' size='sm' className='gap-1.5'>
+            <div className='relative'>
+              <Button
+                variant='outline'
+                size='sm'
+                className='gap-1.5 bg-card shadow-soft'
+                onClick={() => setDatePickerOpen((v) => !v)}
+              >
+                <Calendar className='h-4 w-4' />
+                {selectedDateLabel}
+              </Button>
+
+              {datePickerOpen && (
+                <div className='absolute right-0 top-11 z-50 w-[320px] rounded-2xl border border-border bg-card p-4 shadow-elevated'>
+                  <div className='flex items-center justify-between mb-3'>
+                    <Button
+                      size='icon'
+                      variant='ghost'
+                      className='h-8 w-8 rounded-full'
+                      onClick={() =>
+                        setCalendarMonth(
+                          new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1)
+                        )
+                      }
+                    >
+                      <ChevronLeft className='h-4 w-4' />
+                    </Button>
+
+                    <div className='font-display font-semibold text-sm'>
+                      {monthLabel}
+                    </div>
+
+                    <Button
+                      size='icon'
+                      variant='ghost'
+                      className='h-8 w-8 rounded-full'
+                      onClick={() =>
+                        setCalendarMonth(
+                          new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1)
+                        )
+                      }
+                    >
+                      <ChevronRight className='h-4 w-4' />
+                    </Button>
+                  </div>
+
+                  <div className='grid grid-cols-7 gap-1 mb-2 text-center text-[11px] text-muted-foreground font-medium'>
+                    {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d) => (
+                      <div key={d}>{d}</div>
+                    ))}
+                  </div>
+
+                  <div className='grid grid-cols-7 gap-1'>
+                    {calendarDays.map((day, idx) => {
+                      if (!day) return <div key={idx} className='h-9' />
+
+                      const value = toDateInputValue(day)
+                      const isSelected = value === selectedDate
+                      const isToday = value === toDateInputValue(new Date())
+
+                      return (
+                        <button
+                          key={value}
+                          className={`h-9 rounded-lg text-sm transition-all ${
+                            isSelected
+                              ? 'bg-primary text-primary-foreground shadow-glow'
+                              : isToday
+                              ? 'bg-primary/10 text-primary font-semibold'
+                              : 'hover:bg-secondary text-foreground'
+                          }`}
+                          onClick={() => {
+                            setSelectedDate(value)
+                            setDatePickerOpen(false)
+                          }}
+                        >
+                          {day.getDate()}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  <div className='grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-border'>
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='text-xs'
+                      onClick={() => {
+                        const d = new Date()
+                        setSelectedDate(toDateInputValue(d))
+                        setCalendarMonth(d)
+                        setDatePickerOpen(false)
+                      }}
+                    >
+                      Today
+                    </Button>
+
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='text-xs'
+                      onClick={() => {
+                        const d = new Date()
+                        d.setDate(d.getDate() - 1)
+                        setSelectedDate(toDateInputValue(d))
+                        setCalendarMonth(d)
+                        setDatePickerOpen(false)
+                      }}
+                    >
+                      Yesterday
+                    </Button>
+
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='text-xs'
+                      onClick={() => setDatePickerOpen(false)}
+                    >
+                      Close
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+            <Button variant='outline' size='sm' className='gap-1.5' onClick={exportDashboard}>
               <Download className='h-4 w-4' /> Export
-            </Button>
+            </Button>            
             <Button
               size='sm'
               className='bg-gradient-primary shadow-glow gap-1.5'
@@ -363,9 +576,15 @@ export default function Dashboard() {
             </div>
             <Badge
               variant='outline'
-              className='bg-success/10 text-success border-success/30'
+              className={
+                trend > 0
+                  ? 'bg-success/10 text-success border-success/30'
+                  : trend < 0
+                  ? 'bg-destructive/10 text-destructive border-destructive/30'
+                  : 'bg-muted text-muted-foreground border-border'
+              }
             >
-              {trend.toFixed(1)}%
+              {trend > 0 ? '+' : ''}{trend.toFixed(1)}%
             </Badge>
           </div>
           <ResponsiveContainer width='100%' height={260}>

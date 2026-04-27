@@ -113,6 +113,11 @@ export default function POS() {
   const [discountValue, setDiscountValue] = useState(0);
   const [discountType, setDiscountType] = useState<"percent" | "flat">("percent");
 
+  const currentCustomer = {
+    name: customerName.trim() || "Walk-in",
+    phone: customerPhone.trim() || "",
+  }
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
 

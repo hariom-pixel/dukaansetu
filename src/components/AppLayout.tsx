@@ -1,4 +1,5 @@
-import { Outlet } from 'react-router-dom'
+import { Outlet, useNavigate } from 'react-router-dom'
+import { useState } from 'react'
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { AppSidebar } from './AppSidebar'
 import { Bell, Search, Plus, ChevronDown } from 'lucide-react'
@@ -8,6 +9,10 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 
 export default function AppLayout() {
+  const navigate = useNavigate()
+  const [quickOpen, setQuickOpen] = useState(false)
+  const [globalSearch, setGlobalSearch] = useState('')
+
   return (
     <SidebarProvider>
       <div className='min-h-screen flex w-full bg-background'>
@@ -25,6 +30,25 @@ export default function AppLayout() {
                   <Search className='absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
                   <Input
                     placeholder='Search products, invoices, customers…'
+                    value={globalSearch}
+                    onChange={(e) => setGlobalSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter') return
+
+                      const q = globalSearch.trim().toLowerCase()
+                      if (!q) return
+
+                      if (q.startsWith('inv') || q.includes('invoice')) {
+                        navigate('/sales')
+                      } else if (
+                        q.includes('customer') ||
+                        q.includes('phone')
+                      ) {
+                        navigate('/customers')
+                      } else {
+                        navigate('/inventory')
+                      }
+                    }}
                     className='h-10 rounded-xl border-border bg-background pl-9 pr-16 shadow-sm focus-visible:ring-2 focus-visible:ring-primary/20'
                   />
                   <kbd className='absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground lg:inline-flex'>
@@ -44,13 +68,60 @@ export default function AppLayout() {
                   Live
                 </Badge>
 
-                <Button
-                  size='sm'
-                  className='hidden h-9 rounded-full bg-primary px-4 text-primary-foreground shadow-sm hover:shadow-md transition-all sm:inline-flex'
-                >
-                  <Plus className='mr-1.5 h-4 w-4' />
-                  New
-                </Button>
+                <div className='relative hidden sm:block'>
+                  <Button
+                    size='sm'
+                    className='h-9 rounded-full bg-primary px-4 text-primary-foreground shadow-sm hover:shadow-md transition-all'
+                    onClick={() => setQuickOpen((v) => !v)}
+                  >
+                    <Plus className='mr-1.5 h-4 w-4' />
+                    New
+                  </Button>
+
+                  {quickOpen && (
+                    <div className='absolute right-0 top-11 z-50 w-52 rounded-xl border border-border bg-card p-2 shadow-elevated'>
+                      <button
+                        className='w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary'
+                        onClick={() => {
+                          navigate('/pos')
+                          setQuickOpen(false)
+                        }}
+                      >
+                        New bill / POS
+                      </button>
+
+                      <button
+                        className='w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary'
+                        onClick={() => {
+                          navigate('/inventory')
+                          setQuickOpen(false)
+                        }}
+                      >
+                        Add product
+                      </button>
+
+                      <button
+                        className='w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary'
+                        onClick={() => {
+                          navigate('/customers')
+                          setQuickOpen(false)
+                        }}
+                      >
+                        Add customer
+                      </button>
+
+                      <button
+                        className='w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary'
+                        onClick={() => {
+                          navigate('/purchase')
+                          setQuickOpen(false)
+                        }}
+                      >
+                        New purchase order
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 <Button
                   variant='ghost'
