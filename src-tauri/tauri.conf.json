@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.dukaansetu.app",
   "build": {
-    "beforeDevCommand": "pnpm run dev",
-    "beforeBuildCommand": "pnpm run build",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:8080",
     "frontendDist": "../dist"
   },

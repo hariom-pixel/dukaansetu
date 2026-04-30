@@ -10,6 +10,8 @@ scan barcode instantly
 print instantly
 search instantly
 
+Cloud sync (big step)
+
 
 auto WhatsApp reminders
 due aging
@@ -138,4 +140,7 @@ Rule: Every "Save" button in your React UI should resolve instantly after the SQ
 Since this is a billing system, ensure your SQLite database has WAL (Write-Ahead Logging) enabled. This prevents the database from locking up when your background sync worker is reading data while the cashier is trying to save a new bill.
 
 You’re using BrowserRouter, which often shows a blank/404 when you refresh on a nested route (e.g. /pos) in a Tauri webview. Fix: switch to HashRouter (typical for Tauri), or set up SPA fallback if you have a custom asset server.
+
+
+GST Report
 

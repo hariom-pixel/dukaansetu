@@ -1,4 +1,4 @@
-import { useMemo, useState} from 'react'
+import { useMemo, useState, useEffect} from 'react'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/PageHeader'
 import { StatCard } from '@/components/StatCard'
@@ -44,6 +44,7 @@ import {
   type Invoice,
 } from '@/lib/mockData'
 import { useLocalStore } from '@/hooks/useLocalStore'
+import { getDashboardStats } from "@/services/dashboard.service";
 
 export default function Dashboard() {
   const products = useLocalStore<Product>('erp.products', [])
@@ -54,6 +55,7 @@ export default function Dashboard() {
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().slice(0, 10)
   )
+  const [stats, setStats] = useState<any>(null);
   const [calendarMonth, setCalendarMonth] = useState(new Date())
 
   const today = useMemo(() => new Date(selectedDate), [selectedDate])
@@ -342,6 +344,12 @@ export default function Dashboard() {
     year: 'numeric',
   })
 
+  useEffect(() => {
+    getDashboardStats()
+      .then(setStats)
+      .catch(console.error);
+  }, []);
+
   return (
     <>
       <PageHeader
@@ -489,7 +497,7 @@ export default function Dashboard() {
       <div className='grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6'>
         <StatCard
           label="Today's Sales"
-          value={fmtINR(todaySales)}
+          value={fmtINR(stats?.todaySales || 0)}
           icon={Banknote}
           delta={Number(trend.toFixed(1))}
           hint={salesHint}
@@ -497,8 +505,8 @@ export default function Dashboard() {
         />
 
         <StatCard
-          label='Cash in Hand'
-          value={fmtINR(cashInHand)}
+          label='Today Purchase'
+          value={fmtINR(stats?.todayPurchase || 0)}
           icon={Wallet}
           delta={cashTrend}
           hint={cashHint}
@@ -506,8 +514,8 @@ export default function Dashboard() {
         />
 
         <StatCard
-          label='Online Orders'
-          value={String(onlineOrders)}
+          label='Customer Due'
+          value={fmtINR(stats?.customerDue || 0)}
           icon={ShoppingBag}
           delta={onlineTrend}
           hint={onlineHint}
@@ -515,13 +523,50 @@ export default function Dashboard() {
         />
 
         <StatCard
-          label='Outstanding'
-          value={fmtINR(outstanding)}
+          label='Supplier Payable'
+          value={fmtINR(stats?.supplierDue || 0)}
           icon={AlertTriangle}
           delta={outstandingTrend}
           hint={outstandingHint}
           accent='warning'
         />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+        <Card className="relative overflow-hidden p-5 border border-border/70 shadow-soft rounded-2xl bg-gradient-to-br from-card to-secondary/30">
+          <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Today Profit</div>
+          <div className="mt-2 text-3xl font-display font-extrabold">
+            {fmtINR((stats?.todaySales || 0) - (stats?.todayPurchase || 0))}
+          </div>
+          <div className="mt-2 text-xs text-muted-foreground">
+            Sales minus purchases for today
+          </div>
+        </Card>
+
+        <Card className="relative overflow-hidden p-5 border border-border/70 shadow-soft rounded-2xl bg-gradient-to-br from-card to-primary/5">
+          <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Net Credit Position</div>
+          <div className="mt-2 text-3xl font-display font-extrabold">
+            {fmtINR((stats?.customerDue || 0) - (stats?.supplierDue || 0))}
+          </div>
+          <div className="mt-2 text-xs text-muted-foreground">
+            Customer dues minus supplier payables
+          </div>
+        </Card>
+
+        <Card className="relative overflow-hidden p-5 border border-border/70 shadow-soft rounded-2xl bg-gradient-to-br from-card to-success/5">
+          <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Inventory Value</div>
+          <div className="mt-2 text-3xl font-display font-extrabold">
+            {fmtINR(
+              products.items.reduce(
+                (sum, p) => sum + Number(p.stock || 0) * Number(p.price || 0),
+                0
+              )
+            )}
+          </div>
+          <div className="mt-2 text-xs text-muted-foreground">
+            Current stock value at selling price
+          </div>
+        </Card>
       </div>
 
       <div className='grid grid-cols-1 md:grid-cols-3 gap-3 mb-6'>
@@ -713,96 +758,43 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* Branches + Approvals */}
-      <div className='grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6'>
-        <Card className='lg:col-span-2 p-5 shadow-soft border-border/60'>
-          <div className='flex items-center justify-between mb-4'>
-            <h3 className='font-display font-bold text-lg'>
-              Branch performance
-            </h3>
-            <Button variant='ghost' size='sm' className='text-primary gap-1'>
-              View all <ChevronRight className='h-4 w-4' />
-            </Button>
+      <Card className="p-5 mb-6 border border-border/70 shadow-soft rounded-2xl">
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <h3 className="font-display font-bold text-lg">Cash Flow Snapshot</h3>
+            <p className="text-xs text-muted-foreground">Quick view of money movement today</p>
           </div>
-          <div className='space-y-3'>
-            {BRANCHES.map((b) => (
-              <div
-                key={b.id}
-                className='flex items-center gap-4 p-3 rounded-xl hover:bg-secondary/60 transition-smooth'
-              >
-                <Avatar className='h-10 w-10'>
-                  <AvatarFallback className='bg-gradient-warm text-primary-foreground text-xs font-bold'>
-                    {b.id.slice(-2)}
-                  </AvatarFallback>
-                </Avatar>
-                <div className='flex-1 min-w-0'>
-                  <div className='font-semibold text-sm truncate'>{b.name}</div>
-                  <div className='flex items-center gap-3 mt-1'>
-                    <Progress
-                      value={b.health}
-                      className='h-1.5 flex-1 max-w-[200px]'
-                    />
-                    <span className='text-xs text-muted-foreground font-mono-num'>
-                      {b.health}%
-                    </span>
-                  </div>
-                </div>
-                <div className='text-right shrink-0'>
-                  <div className='font-display font-bold font-mono-num'>
-                    {fmtINR(b.sales)}
-                  </div>
-                  <div className='text-[11px] text-warning flex items-center gap-1 justify-end'>
-                    <AlertTriangle className='h-3 w-3' /> {b.alerts} alerts
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
+          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
+            Today
+          </Badge>
+        </div>
 
-        <Card className='p-5 shadow-soft border-border/60'>
-          <div className='flex items-center justify-between mb-4'>
-            <h3 className='font-display font-bold text-lg'>
-              Pending approvals
-            </h3>
-            <Badge className='bg-primary/10 text-primary border-0'>
-              {KPIS.pendingApprovals}
-            </Badge>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="rounded-xl border border-border/70 bg-secondary/30 p-4">
+            <div className="text-xs uppercase tracking-wide text-muted-foreground">Cash In</div>
+            <div className="mt-2 text-2xl font-bold text-success">
+              {fmtINR(stats?.todaySales || 0)}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">From sales</div>
           </div>
-          <div className='space-y-2'>
-            {APPROVALS.map((a) => (
-              <div
-                key={a.id}
-                className='p-3 rounded-xl border border-border bg-secondary/30 hover:border-primary/40 transition-smooth'
-              >
-                <div className='flex items-center justify-between mb-1'>
-                  <span className='font-semibold text-sm'>{a.type}</span>
-                  <span className='text-[11px] text-muted-foreground flex items-center gap-1'>
-                    <Clock className='h-3 w-3' /> {a.time}
-                  </span>
-                </div>
-                <div className='text-xs text-muted-foreground mb-2'>
-                  {a.by} ·{' '}
-                  <span className='font-mono-num font-semibold text-foreground'>
-                    {a.value}
-                  </span>
-                </div>
-                <div className='flex gap-2'>
-                  <Button
-                    size='sm'
-                    className='h-7 text-xs flex-1 bg-gradient-primary'
-                  >
-                    Approve
-                  </Button>
-                  <Button size='sm' variant='outline' className='h-7 text-xs'>
-                    Reject
-                  </Button>
-                </div>
-              </div>
-            ))}
+
+          <div className="rounded-xl border border-border/70 bg-secondary/30 p-4">
+            <div className="text-xs uppercase tracking-wide text-muted-foreground">Cash Out</div>
+            <div className="mt-2 text-2xl font-bold text-destructive">
+              {fmtINR(stats?.todayPurchase || 0)}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">Purchases / stock-in</div>
           </div>
-        </Card>
-      </div>
+
+          <div className="rounded-xl border border-border/70 bg-secondary/30 p-4">
+            <div className="text-xs uppercase tracking-wide text-muted-foreground">Net Cash</div>
+            <div className="mt-2 text-2xl font-bold">
+              {fmtINR((stats?.todaySales || 0) - (stats?.todayPurchase || 0))}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">In minus out</div>
+          </div>
+        </div>
+      </Card>
 
       {/* Bottom row */}
       <div className='grid grid-cols-1 lg:grid-cols-3 gap-4'>
@@ -878,16 +870,16 @@ export default function Dashboard() {
             <div className='flex items-center justify-between mb-3'>
               <h3 className='font-display font-bold text-base'>Low stock</h3>
               <Badge className='bg-warning/15 text-warning border-0'>
-                {liveLowStock.length}
+                {stats?.lowStock?.length}
               </Badge>
             </div>
             <div className='space-y-2'>
-              {liveLowStock.length === 0 ? (
+              {stats?.lowStock?.length === 0 ? (
                 <div className='text-sm text-muted-foreground'>
                   No low-stock items right now.
                 </div>
               ) : (
-                liveLowStock.map((p) => (
+                stats?.lowStock?.map((p) => (
                   <div
                     key={p.sku}
                     className='flex items-center justify-between text-sm'
@@ -895,15 +887,15 @@ export default function Dashboard() {
                     <div className='min-w-0'>
                       <div className='font-medium truncate'>{p.name}</div>
                       <div className='text-xs text-muted-foreground'>
-                        {p.branch}
+                        Reorder at {p.reorder_level}
                       </div>
                     </div>
                     <div className='text-right shrink-0'>
                       <div className='font-mono-num font-bold text-destructive'>
-                        {p.qty}
+                        {p.stock}
                       </div>
                       <div className='text-[10px] text-muted-foreground'>
-                        /{p.reorder}
+                        /{p.reorder_level}
                       </div>
                     </div>
                   </div>
@@ -911,39 +903,37 @@ export default function Dashboard() {
               )}
             </div>
           </Card>
-          <Card className='p-5 shadow-soft border-border/60'>
-            <div className='flex items-center justify-between mb-3'>
-              <h3 className='font-display font-bold text-base'>
-                Expiring soon
-              </h3>
-              <Badge className='bg-destructive/15 text-destructive border-0'>
-                {EXPIRING.length}
-              </Badge>
-            </div>
-            <div className='space-y-2'>
-              {EXPIRING.map((p) => (
-                <div
-                  key={p.sku}
-                  className='flex items-center justify-between text-sm'
-                >
-                  <div className='min-w-0'>
-                    <div className='font-medium truncate'>{p.name}</div>
-                    <div className='text-xs text-muted-foreground'>
-                      Batch {p.batch}
-                    </div>
-                  </div>
-                  <Badge
-                    variant='outline'
-                    className='bg-destructive/10 text-destructive border-destructive/30 font-mono-num'
-                  >
-                    {p.days}d
-                  </Badge>
-                </div>
-              ))}
-            </div>
-          </Card>
         </div>
       </div>
+
+      <Card className="p-5 shadow-soft border border-border/70 rounded-2xl mb-4">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="font-display font-bold text-lg">Owner Alerts</h3>
+            <p className="text-xs text-muted-foreground">Important things to check today</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="rounded-xl border border-border/70 p-4 bg-secondary/25">
+            <div className="text-sm font-semibold">Customer dues</div>
+            <div className="mt-1 text-xl font-bold">{fmtINR(stats?.customerDue || 0)}</div>
+            <div className="text-xs text-muted-foreground mt-1">Follow up pending payments</div>
+          </div>
+
+          <div className="rounded-xl border border-border/70 p-4 bg-secondary/25">
+            <div className="text-sm font-semibold">Supplier payables</div>
+            <div className="mt-1 text-xl font-bold">{fmtINR(stats?.supplierDue || 0)}</div>
+            <div className="text-xs text-muted-foreground mt-1">Payments due to suppliers</div>
+          </div>
+
+          <div className="rounded-xl border border-border/70 p-4 bg-secondary/25">
+            <div className="text-sm font-semibold">Low stock</div>
+            <div className="mt-1 text-xl font-bold">{stats?.lowStock?.length || 0}</div>
+            <div className="text-xs text-muted-foreground mt-1">Items need reorder attention</div>
+          </div>
+        </div>
+      </Card>
 
       {/* Top products */}
       <Card className='p-5 shadow-soft border-border/60 mt-4'>
@@ -960,33 +950,29 @@ export default function Dashboard() {
             Full report <ArrowUpRight className='h-4 w-4' />
           </Button>
         </div>
-        {topProducts.length === 0 ? (
+        {(stats?.topProducts?.length || 0) === 0 ? (
           <div className='text-sm text-muted-foreground'>
             No product movement yet.
           </div>
         ) : (
           <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3'>
-            {topProducts.map((p, i) => (
+            {stats?.topProducts?.map((p: any, i: number) => (
               <div
-                key={p.sku}
+                key={p.name}
                 className='p-4 rounded-xl border border-border bg-gradient-cream hover:shadow-card transition-smooth'
               >
                 <div className='flex items-start gap-3'>
                   <div className='h-9 w-9 rounded-lg bg-gradient-primary text-primary-foreground flex items-center justify-center font-display font-bold text-sm shadow-glow'>
                     {i + 1}
                   </div>
+
                   <div className='flex-1 min-w-0'>
-                    <div className='font-semibold text-sm truncate'>{p.name}</div>
-                    <div className='text-[11px] text-muted-foreground font-mono-num'>
-                      {p.sku}
+                    <div className='font-semibold text-sm truncate'>
+                      {p.name}
                     </div>
-                    <div className='flex items-center justify-between mt-2'>
-                      <span className='text-xs text-muted-foreground'>
-                        {p.qty} units
-                      </span>
-                      <span className='font-mono-num font-bold text-sm'>
-                        {fmtINR(p.revenue)}
-                      </span>
+
+                    <div className='text-[11px] text-muted-foreground'>
+                      Sold: {p.sold}
                     </div>
                   </div>
                 </div>

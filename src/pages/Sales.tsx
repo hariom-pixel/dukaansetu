@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { Card } from "@/components/ui/card";
@@ -15,6 +15,7 @@ import { useLocalStore, newId } from "@/hooks/useLocalStore";
 import { toast } from "sonner";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 import { addStockLedgerEntry, createStockLedgerEntry } from "@/lib/stockLedger";
+import { getAllSales, getSaleItems, collectSalePayment, returnSale, voidSale } from "@/services/sales-db.service";
 
 const data = [
   { day: "Mon", pos: 92000, b2b: 50000, online: 28000 },
@@ -60,7 +61,6 @@ interface Form { customer: string; channel: string; amount: string; status: Stat
 const empty: Form = { customer: "", channel: "POS", amount: "", status: "Paid" };
 
 export default function Sales() {
-  const { items, add, update, remove } = useLocalStore<InvoiceEx>("erp.invoices", RECENT_INVOICES as InvoiceEx[]);
   const customersStore = useLocalStore<any>("erp.customers", []);
   const journalStore = useLocalStore<any>("erp.journal", []);
   const productsStore = useLocalStore<any>("erp.products", []);
@@ -75,6 +75,7 @@ export default function Sales() {
   const [voidReason, setVoidReason] = useState("");
   const [returning, setReturning] = useState<InvoiceEx | null>(null);
   const [returnReason, setReturnReason] = useState("");
+  const [items, setItems] = useState<any[]>([]);
 
   const openAdd = () => { setEditing(null); setForm(empty); setOpen(true); };
   const openEdit = (i: Invoice) => { setEditing(i); setForm({ customer: i.customer, channel: i.channel, amount: String(i.amount), status: i.status }); setOpen(true); };
@@ -92,271 +93,111 @@ export default function Sales() {
     setOpen(false);
   };
 
-  const confirmVoid = () => {
+  const confirmVoid = async () => {
     if (!voiding) return;
-
-    if ((voiding.payments?.length || 0) > 0 && (voiding.dueAmount || 0) > 0) {
-      toast.error("Cannot void partially paid invoice");
-      return;
-    }
-
-    if (voiding.status === "Voided") {
-      toast.error("Invoice already voided");
-      return;
-    }
 
     if (!voidReason.trim()) {
       toast.error("Void reason required");
       return;
     }
 
-    // 1. restore stock
-    ;(voiding.items || []).forEach((item) => {
-      const product = productsStore.items.find((p: any) => p.sku === item.sku);
-      if (product) {
-        productsStore.update(product.id, {
-          stock: Number(product.stock || 0) + Number(item.qty || 0),
-        });
+    try {
+      await voidSale(voiding.id, voidReason.trim());
 
-        addStockLedgerEntry(
-          createStockLedgerEntry({
-            sku: item.sku,
-            productName: item.name,
-            qty: Number(item.qty || 0),
-            direction: "IN",
-            reason: "VOID",
-            refId: voiding.id,
-            note: `Void invoice ${voiding.id}`,
-          })
-        );
-      }
-    });
+      toast.success(`Invoice ${voiding.id} voided`);
 
-    // 2. reverse customer outstanding only for pure credit dues
-    if ((voiding.dueAmount || 0) > 0) {
-      const customer = customersStore.items.find(
-        (c: any) => c.name === voiding.customer
-      );
+      await loadSales();
 
-      if (customer) {
-        customersStore.update(customer.id, {
-          outstanding: Math.max(
-            Number(customer.outstanding || 0) - Number(voiding.dueAmount || 0),
-            0
-          ),
-          last: "Today",
+      if (viewing?.id === voiding.id) {
+        setViewing({
+          ...viewing,
+          status: "Voided",
+          paidAmount: 0,
+          dueAmount: 0,
         });
       }
+
+      setVoiding(null);
+      setVoidReason("");
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to void invoice");
     }
-
-    // 3. reverse cash only if it was fully paid and had payment entries
-    if ((voiding.paidAmount || 0) > 0 && (voiding.dueAmount || 0) === 0) {
-      journalStore.add({
-        id: `J-${Date.now()}`,
-        date: new Date().toLocaleDateString(),
-        desc: `Void invoice ${voiding.id} · ${voiding.customer}`,
-        debit: Number(voiding.paidAmount || 0),
-        credit: 0,
-      });
-    }
-
-    // 4. mark invoice voided
-    update(voiding.id, {
-      status: "Voided" as any,
-      paidAmount: 0,
-      dueAmount: 0,
-      voidedAt: new Date().toISOString(),
-      voidReason: voidReason.trim(),
-    });
-
-    // 5. update viewer if open
-    if (viewing?.id === voiding.id) {
-      setViewing({
-        ...viewing,
-        status: "Voided" as any,
-        paidAmount: 0,
-        dueAmount: 0,
-        voidedAt: new Date().toISOString(),
-        voidReason: voidReason.trim(),
-      });
-    }
-
-    toast.success(`Invoice ${voiding.id} voided`);
-    setVoiding(null);
-    setVoidReason("");
   };
 
-  const collectInvoicePayment = () => {
+  const collectInvoicePayment = async () => {
     if (!collecting) return;
 
     const amount = Number(collectAmount) || 0;
+
     if (amount <= 0) {
       toast.error("Enter valid amount");
       return;
     }
 
-    const currentDue = collecting.dueAmount || 0;
-    const applied = Math.min(amount, currentDue);
-    const nextDue = Math.max(currentDue - applied, 0);
-    const nextPaid = (collecting.paidAmount || 0) + applied;
+    try {
+      const applied = await collectSalePayment(collecting.id, amount);
 
-    update(collecting.id, {
-      paidAmount: nextPaid,
-      dueAmount: nextDue,
-      status: nextDue === 0 ? "Paid" : "Credit",
-      payments: [
-        ...(collecting.payments || []),
-        {
-          id: `PAY-${Date.now()}`,
-          date: new Date().toLocaleDateString(),
-          amount: applied,
-          mode: collectMode,
-        },
-      ],
-    });
+      if (applied <= 0) {
+        toast.error("No due amount found");
+        return;
+      }
 
-    if (viewing?.id === collecting.id) {
-      setViewing({
-        ...viewing,
-        paidAmount: nextPaid,
-        dueAmount: nextDue,
-        status: nextDue === 0 ? "Paid" : "Credit",
-        payments: [
-          ...(viewing.payments || []),
-          {
-            id: `PAY-${Date.now()}`,
-            date: new Date().toLocaleDateString(),
-            amount: applied,
-            mode: collectMode,
-          },
-        ],
-      });
+      toast.success(`Collected ${fmtINR(applied)} for ${collecting.id}`);
+
+      await loadSales();
+
+      if (viewing?.id === collecting.id) {
+        setViewing({
+          ...viewing,
+          paidAmount: Number(viewing.paidAmount || 0) + applied,
+          dueAmount: Math.max(Number(viewing.dueAmount || 0) - applied, 0),
+          status:
+            Math.max(Number(viewing.dueAmount || 0) - applied, 0) <= 0
+              ? "Paid"
+              : "Credit",
+        });
+      }
+
+      setCollecting(null);
+      setCollectAmount("");
+      setCollectMode("Cash");
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to collect payment");
     }
-
-    const customer = customersStore.items.find(
-      (c: any) => c.name === collecting.customer
-    );
-    if (customer) {
-      customersStore.update(customer.id, {
-        outstanding: Math.max((customer.outstanding || 0) - applied, 0),
-        last: "Today",
-      });
-    }
-
-    journalStore.add({
-      id: `J-${Date.now()}`,
-      date: new Date().toLocaleDateString(),
-      desc: `Invoice payment ${collecting.id} · ${collecting.customer}`,
-      debit: 0,
-      credit: applied,
-    });
-
-    toast.success(`Collected ${fmtINR(applied)} for ${collecting.id}`);
-    setCollecting(null);
-    setCollectAmount("");
-    setCollectMode("Cash");
   };
 
-  const confirmReturn = () => {
+  const confirmReturn = async () => {
     if (!returning) return;
-
-    if (returning.status === "Returned") {
-      toast.error("Already returned");
-      return;
-    }
-
-    if (!returning.items || returning.items.length === 0) {
-      toast.error("No items found");
-      return;
-    }
 
     if (!returnReason.trim()) {
       toast.error("Return reason required");
       return;
     }
 
-    // 1. restore stock
-    returning.items.forEach((item: any) => {
-      const p = productsStore.items.find((x: any) => x.sku === item.sku);
-      if (p) {
-        productsStore.update(p.id, {
-          stock: Number(p.stock || 0) + Number(item.qty || 0),
-        });
+    try {
+      await returnSale(returning.id, returnReason.trim());
 
-        addStockLedgerEntry(
-          createStockLedgerEntry({
-            sku: item.sku,
-            productName: item.name,
-            qty: Number(item.qty || 0),
-            direction: "IN",
-            reason: "RETURN",
-            refId: returning.id,
-            note: returnReason.trim(),
-          })
-        );
-      }
-    });
+      toast.success(`Invoice ${returning.id} returned`);
 
-    // 2. credit invoice case
-    if ((returning.dueAmount || 0) > 0) {
-      const customer = customersStore.items.find(
-        (c: any) => c.name === returning.customer
-      );
+      await loadSales();
 
-      if (customer) {
-        customersStore.update(customer.id, {
-          outstanding: Math.max(
-            Number(customer.outstanding || 0) - Number(returning.amount || 0),
-            0
-          ),
-          last: "Today",
+      if (viewing?.id === returning.id) {
+        setViewing({
+          ...viewing,
+          status: "Returned",
+          paidAmount: 0,
+          dueAmount: 0,
         });
       }
 
-      journalStore.add({
-        id: `J-${Date.now()}`,
-        date: new Date().toLocaleDateString(),
-        desc: `Return (credit) ${returning.id}`,
-        debit: 0,
-        credit: Number(returning.amount || 0),
-        type: "RETURN",
-        refId: returning.id,
-      });
+      setReturning(null);
+      setReturnReason("");
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to return invoice");
     }
-
-    // 3. paid invoice case
-    if ((returning.paidAmount || 0) > 0) {
-      journalStore.add({
-        id: `J-${Date.now()}`,
-        date: new Date().toLocaleDateString(),
-        desc: `Refund ${returning.id}`,
-        debit: Number(returning.paidAmount || 0),
-        credit: 0,
-        type: "REFUND",
-        refId: returning.id,
-      });
-    }
-
-    update(returning.id, {
-      status: "Returned" as any,
-      paidAmount: 0,
-      dueAmount: 0,
-      returnReason: returnReason.trim(),
-    });
-
-    if (viewing?.id === returning.id) {
-      setViewing({
-        ...viewing,
-        status: "Returned" as any,
-        paidAmount: 0,
-        dueAmount: 0,
-        returnReason: returnReason.trim(),
-      });
-    }
-
-    toast.success(`Invoice ${returning.id} returned`);
-    setReturning(null);
-    setReturnReason("");
   };
 
   const activeItems = items.filter((i: any) => i.status !== "Voided");
@@ -364,6 +205,15 @@ export default function Sales() {
   const net = activeItems.reduce((s, i) => s + Number(i.amount || 0), 0);
   const avg = activeItems.length ? Math.round(net / activeItems.length) : 0;
   const totalDue = activeItems.reduce((s, i) => s + Number(i.dueAmount || 0), 0);
+
+  async function loadSales() {
+    const rows = await getAllSales();
+    setItems(rows);
+  }
+
+  useEffect(() => {
+    loadSales().catch(console.error);
+  }, []);
 
   return (
     <>
@@ -474,7 +324,13 @@ export default function Sales() {
                         size="sm"
                         variant="outline"
                         className="h-8 text-xs"
-                        onClick={() => setViewing(inv)}
+                        onClick={async () => {
+                          const saleItems = await getSaleItems(inv.id);
+                          setViewing({
+                            ...inv,
+                            items: saleItems,
+                          });
+                        }}
                       >
                         View
                       </Button>

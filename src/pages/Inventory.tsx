@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { Card } from "@/components/ui/card";
@@ -10,9 +10,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Package, Boxes, AlertTriangle, Clock, Search, Filter, Plus, Download, ArrowRightLeft, Pencil, Trash2 } from "lucide-react";
 import { POS_PRODUCTS, LOW_STOCK, EXPIRING, fmtINR, type Product } from "@/lib/mockData";
-import { useLocalStore } from "@/hooks/useLocalStore";
 import { toast } from "sonner";
-import { getStockLedger } from "@/lib/stockLedger";
+import { getStockLedger, addStockLedgerEntry, createStockLedgerEntry } from "@/lib/stockLedger";
+import {
+  getAllProducts,
+  createProduct,
+  updateProduct,
+  updateProductStock,
+  deleteProduct,
+} from "@/services/product-db.service";
+
 
 type InventoryProduct = Product & {
   barcode?: string;
@@ -36,7 +43,7 @@ const empty: Form = {
 };
 
 export default function Inventory() {
-  const { items: products, add, update, remove } = useLocalStore<InventoryProduct>("erp.products", POS_PRODUCTS as InventoryProduct[]);
+  const [products, setProducts] = useState<InventoryProduct[]>([]);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
@@ -78,7 +85,7 @@ export default function Inventory() {
     setAdjustOpen(true);
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!form.sku.trim() || !form.name.trim()) {
       toast.error("SKU and name required");
       return;
@@ -87,44 +94,58 @@ export default function Inventory() {
     const price = Number(form.price) || 0;
     const reorderLevel = Number(form.reorderLevel) || 20;
 
-    if (editing) {
-      update(editing.id, {
-        sku: form.sku,
-        name: form.name,
-        barcode: form.barcode.trim(),
-        price,
-        reorderLevel,
-      });
-      toast.success("Product updated");
-    } else {
-      if (products.some((p) => p.sku === form.sku)) {
-        toast.error("SKU already exists");
-        return;
+    try {
+      if (editing) {
+        await updateProduct(Number(editing.id), {
+          name: form.name,
+          barcode: form.barcode.trim(),
+          price,
+          reorderLevel,
+        });
+
+        toast.success("Product updated");
+      } else {
+        if (products.some((p) => p.sku === form.sku)) {
+          toast.error("SKU already exists");
+          return;
+        }
+
+        await createProduct({
+          sku: form.sku,
+          name: form.name,
+          barcode: form.barcode.trim(),
+          price,
+          stock: 0,
+          reorderLevel,
+        });
+
+        toast.success("Product added");
       }
 
-      add({
-        id: form.sku,
-        sku: form.sku,
-        name: form.name,
-        barcode: form.barcode.trim(),
-        price,
-        stock: 0,
-        reorderLevel,
-      });
-      toast.success("Product added");
+      await loadProducts();
+      setOpen(false);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to save product");
     }
-
-    setOpen(false);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!confirmDel) return;
-    remove(confirmDel.id);
-    toast.success(`${confirmDel.name} deleted`);
-    setConfirmDel(null);
+
+    try {
+      await deleteProduct(Number(confirmDel.id));
+      await loadProducts();
+
+      toast.success(`${confirmDel.name} deleted`);
+      setConfirmDel(null);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to delete product");
+    }
   };
 
-  const submitAdjustment = () => {
+  const submitAdjustment = async () => {
     if (!adjusting) return;
 
     const qty = Number(adjustQty);
@@ -133,13 +154,11 @@ export default function Inventory() {
       return;
     }
 
-    update(adjusting.id, {
-      stock: Math.max(0, adjusting.stock + qty),
-    });
+    const newStock = Math.max(0, adjusting.stock + qty);
+    await updateProductStock(Number(adjusting.id), newStock);
+    await loadProducts();
 
     // ADD STOCK LEDGER ENTRY
-    const { addStockLedgerEntry, createStockLedgerEntry } = require("@/lib/stockLedger");
-
     addStockLedgerEntry(
       createStockLedgerEntry({
         sku: adjusting.sku,
@@ -170,6 +189,15 @@ export default function Inventory() {
   const lowCount = products.filter(
     (p) => p.stock <= Number(p.reorderLevel ?? 20)
   ).length;
+
+  async function loadProducts() {
+    const rows = await getAllProducts();
+    setProducts(rows as InventoryProduct[]);
+  }
+
+  useEffect(() => {
+    loadProducts().catch(console.error);
+  }, []);
 
   return (
     <>

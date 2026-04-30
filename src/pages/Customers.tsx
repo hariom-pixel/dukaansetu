@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { Card } from "@/components/ui/card";
@@ -14,6 +14,14 @@ import { Users, Heart, Sparkles, Plus, MessageCircle, Pencil, Trash2 } from "luc
 import { CUSTOMERS, fmtINR, type Customer } from "@/lib/mockData";
 import { useLocalStore, newId } from "@/hooks/useLocalStore";
 import { toast } from "sonner";
+import {
+  getAllCustomers,
+  getCustomerInvoices as getCustomerInvoicesFromDb,
+  getCustomerLedger as getCustomerLedgerFromDb,
+  collectCustomerPayment,
+  type CustomerInvoiceRow,
+  type CustomerLedgerRow,
+} from "@/services/customer-db.service";
 
 const tierColor: Record<string, string> = {
   Platinum: "bg-gradient-warm text-primary-foreground",
@@ -32,7 +40,6 @@ type CustomerEx = Customer & {
 };
 
 export default function Customers() {
-  const { items, add, update, remove } = useLocalStore<CustomerEx>("erp.customers", CUSTOMERS as CustomerEx[]);
   const journalStore = useLocalStore<any>("erp.journal", []);
   const invoicesStore = useLocalStore<any>("erp.invoices", []);
   const [open, setOpen] = useState(false);
@@ -42,6 +49,9 @@ export default function Customers() {
   const [form, setForm] = useState<Form>(empty);
   const [confirmDel, setConfirmDel] = useState<CustomerEx | null>(null);
   const [query, setQuery] = useState("");
+  const [items, setItems] = useState<CustomerEx[]>([]);
+  const [profileInvoices, setProfileInvoices] = useState<CustomerInvoiceRow[]>([]);
+  const [ledgerRows, setLedgerRows] = useState<CustomerLedgerRow[]>([]);
 
   const openAdd = () => { setEditing(null); setForm(empty); setOpen(true); };
   const openEdit = (c: CustomerEx) => { setEditing(c); setForm({ name: c.name, visits: String(c.visits), spent: String(c.spent), loyalty: c.loyalty }); setOpen(true); };
@@ -148,36 +158,61 @@ export default function Customers() {
     );
 };
 
-  const collectFromCustomer = (customer: CustomerEx) => {
+  const collectFromCustomer = async (customer: CustomerEx) => {
     const raw = window.prompt(
       `Collect amount from ${customer.name} (max ₹${customer.outstanding || 0})`,
       String(customer.outstanding || 0)
     );
+
     if (!raw) return;
 
     const amt = Number(raw) || 0;
+
     if (amt <= 0) {
       toast.error("Enter valid amount");
       return;
     }
 
-    const applied = Math.min(amt, customer.outstanding || 0);
+    try {
+      const applied = await collectCustomerPayment(customer.name, amt);
 
-    update(customer.id, {
-      outstanding: Math.max((customer.outstanding || 0) - applied, 0),
-      last: "Today",
-    });
+      if (applied <= 0) {
+        toast.error("No outstanding dues found");
+        return;
+      }
 
-    toast.success(`Collected ${fmtINR(applied)} from ${customer.name}`);
+      toast.success(`Collected ${fmtINR(applied)} from ${customer.name}`);
 
-    if (profileCustomer?.id === customer.id) {
-      setProfileCustomer({
-        ...customer,
-        outstanding: Math.max((customer.outstanding || 0) - applied, 0),
-        last: "Today",
-      });
+      await loadCustomers();
+
+      if (profileCustomer?.name === customer.name) {
+        const updatedCustomers = await getAllCustomers();
+        const updatedCustomer = updatedCustomers.find((c) => c.name === customer.name);
+
+        if (updatedCustomer) {
+          setProfileCustomer(updatedCustomer as CustomerEx);
+        }
+
+        const invoices = await getSqlCustomerInvoices(customer.name);
+        setProfileInvoices(invoices);
+
+        const ledger = await getSqlCustomerLedger(customer.name);
+        setLedgerRows(ledger);
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to collect payment");
     }
   };
+
+  async function loadCustomers() {
+    const rows = await getAllCustomers();
+    setItems(rows as CustomerEx[]);
+  }
+
+  useEffect(() => {
+    loadCustomers().catch(console.error);
+  }, []);
 
   return (
     <>
@@ -260,7 +295,11 @@ export default function Customers() {
                   </td>
 
                   <td className="px-4 py-3 text-right space-x-2">
-                    <Button size="sm" variant="outline" onClick={() => setLedgerCustomer(c)}>
+                    <Button size="sm" variant="outline" onClick={async () => {
+                      setLedgerCustomer(c);
+                      const rows = await getCustomerLedgerFromDb(c.name);
+                      setLedgerRows(rows);
+                    }}>
                       Ledger
                     </Button>
 
@@ -268,7 +307,11 @@ export default function Customers() {
                       size="sm"
                       variant="outline"
                       className="text-xs"
-                      onClick={() => setProfileCustomer(c)}
+                      onClick={async () => {
+                        setProfileCustomer(c);
+                         const rows = await getCustomerInvoicesFromDb(c.name);
+                        setProfileInvoices(rows);
+                      }}
                     >
                       Profile
                     </Button>
@@ -404,7 +447,11 @@ export default function Customers() {
 
                 <Button
                   variant="outline"
-                  onClick={() => setLedgerCustomer(profileCustomer)}
+                  onClick={async () => {
+                    setLedgerCustomer(profileCustomer);
+                    const rows = await getCustomerLedgerFromDb(profileCustomer.name);
+                    setLedgerRows(rows);
+                  }}
                 >
                   Open ledger
                 </Button>
@@ -434,14 +481,14 @@ export default function Customers() {
                       </tr>
                     </thead>
                     <tbody>
-                      {getCustomerInvoices(profileCustomer.name).length === 0 ? (
+                      {profileInvoices.length === 0 ? (
                         <tr>
                           <td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">
                             No invoices found for this customer.
                           </td>
                         </tr>
                       ) : (
-                        getCustomerInvoices(profileCustomer.name).map((inv: any) => (
+                        profileInvoices.map((inv: any) => (
                           <tr key={inv.id} className="border-t border-border hover:bg-secondary/30">
                             <td className="px-4 py-3 font-mono-num text-primary font-semibold">
                               {inv.id}
@@ -515,7 +562,7 @@ export default function Customers() {
 
               <tbody>
                 {ledgerCustomer &&
-                  getLedger(ledgerCustomer.name).map((e, i) => (
+                  ledgerRows.map((e, i) => (
                     <tr key={i} className="border-t border-border">
                       <td className="px-4 py-3 text-xs text-muted-foreground">
                         {new Date(e.date).toLocaleDateString()}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { Card } from "@/components/ui/card";
@@ -15,6 +15,15 @@ import { useLocalStore, newId } from "@/hooks/useLocalStore";
 import { toast } from "sonner";
 import { Product } from "@/lib/mockData";
 import { addStockLedgerEntry, createStockLedgerEntry } from "@/lib/stockLedger";
+import { getAllProducts, type ProductRow } from "@/services/product-db.service";
+import {
+  getAllSuppliers,
+  getAllPurchases,
+  createSupplier,
+  createPurchase,
+  receivePurchase,
+  paySupplier
+} from "@/services/purchase-db.service";
 
 type Status = PurchaseOrder["status"];
 type PurchaseLine = {
@@ -47,15 +56,18 @@ const emptyPO: POForm = {
 };
 
 export default function Purchase() {
-  const pos = useLocalStore<PurchaseOrderEx>("erp.purchaseOrders", PURCHASE_ORDERS as PurchaseOrderEx[]);
-  const sup = useLocalStore<Supplier>("erp.suppliers", SUPPLIERS);
+  // const pos = useLocalStore<PurchaseOrderEx>("erp.purchaseOrders", PURCHASE_ORDERS as PurchaseOrderEx[]);
+  // const sup = useLocalStore<Supplier>("erp.suppliers", SUPPLIERS);
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<PurchaseOrderEx | null>(null);
   const [form, setForm] = useState<POForm>(emptyPO);
   const [confirmDel, setConfirmDel] = useState<PurchaseOrderEx | null>(null);
+  const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
+  const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [products, setProducts] = useState<ProductRow[]>([]);
 
-  const productsStore = useLocalStore<Product>("erp.products", []);
+  // const productsStore = useLocalStore<Product>("erp.products", []);
   const journalStore = useLocalStore("erp.journal", []);
 
 
@@ -63,8 +75,8 @@ export default function Purchase() {
     setEditing(null);
     setForm({
       ...emptyPO,
-      supplier: sup.items[0]?.name || "",
-      productSku: productsStore.items[0]?.sku || "",
+      supplier: suppliers[0]?.name || "",
+      productSku: products[0]?.sku || "",
     });
     setOpen(true);
   };
@@ -83,7 +95,7 @@ export default function Purchase() {
     setOpen(true);
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!form.supplier) {
       toast.error("Supplier required");
       return;
@@ -107,62 +119,68 @@ export default function Purchase() {
       return;
     }
 
-    const product = productsStore.items.find((p) => p.sku === form.productSku);
+    const product = products.find((p) => p.sku === form.productSku);
+
     if (!product) {
       toast.error("Selected product not found");
       return;
     }
 
     const value = qty * price;
-
-    const lines: PurchaseLine[] = [
-      {
-        sku: product.sku,
-        name: product.name,
-        qty,
-        price,
-      },
-    ];
-
     if (editing) {
-      pos.update(editing.id, {
-        supplier: form.supplier,
-        items: qty,
-        value,
-        status: form.status,
-        eta: form.eta,
-        lines,
-      });
-      toast.success("PO updated");
-    } else {
-      pos.add({
-        id: newId("PO"),
-        supplier: form.supplier,
-        items: qty,
-        value,
-        status: form.status,
-        eta: form.eta,
-        lines,
-      });
-      toast.success("PO created");
-    }
-    setOpen(false);
-  };
-
-  const confirmDelete = () => {
-      if (!confirmDel) return;
-
-      if (confirmDel.status === "Delivered") {
-        toast.error("Cannot delete delivered PO");
+        toast.error("Edit PO update coming next");
         return;
       }
 
-      pos.remove(confirmDel.id);
-      toast.success(`${confirmDel.id} deleted`);
-      setConfirmDel(null);
+      const id = `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    try {
+      await createPurchase({
+        id,
+        supplier: form.supplier,
+        items: qty,
+        value,
+        status: form.status,
+        eta: form.eta,
+        line: {
+          sku: product.sku,
+          name: product.name,
+          qty,
+          price,
+        },
+      });
+
+      await loadPurchaseData();
+      toast.success(editing ? "PO updated" : "PO created");
+      setOpen(false);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to save purchase order");
+    }
   };
 
-  const payables = sup.items.reduce((s, x) => s + x.outstanding, 0);
+  const confirmDelete = () => {
+    toast.error("Delete PO will be connected to SQLite next");
+    setConfirmDel(null);
+  };
+
+  const payables = suppliers.reduce((s, x) => s + x.outstanding, 0);
+
+  async function loadPurchaseData() {
+    const [poRows, supplierRows, productRows] = await Promise.all([
+      getAllPurchases(),
+      getAllSuppliers(),
+      getAllProducts(),
+    ]);
+
+    setPurchaseOrders(poRows as any[]);
+    setSuppliers(supplierRows as any[]);
+    setProducts(productRows);
+  }
+
+  useEffect(() => {
+    loadPurchaseData().catch(console.error);
+  }, []);
 
   return (
     <>
@@ -179,10 +197,10 @@ export default function Purchase() {
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Open POs" value={String(pos.items.filter(p => p.status !== "Delivered").length)} icon={FileText} delta={+2} hint="active" accent="primary" />
-        <StatCard label="In transit" value={String(pos.items.filter(p => p.status === "In transit").length)} icon={Truck} delta={+1} hint="GRN pending" accent="accent" />
+        <StatCard label="Open POs" value={String(purchaseOrders.filter(p => p.status !== "Delivered").length)} icon={FileText} delta={+2} hint="active" accent="primary" />
+        <StatCard label="In transit" value={String(purchaseOrders.filter(p => p.status === "In transit").length)} icon={Truck} delta={+1} hint="GRN pending" accent="accent" />
         <StatCard label="Payables" value={fmtINR(payables)} icon={Wallet} delta={-4} hint="supplier dues" accent="warning" />
-        <StatCard label="Suppliers" value={String(sup.items.length)} icon={Truck} delta={0} hint="active" accent="success" />
+        <StatCard label="Suppliers" value={String(suppliers.length)} icon={Truck} delta={0} hint="active" accent="success" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -204,7 +222,7 @@ export default function Purchase() {
                 </tr>
               </thead>
               <tbody>
-                {pos.items.map((po) => (
+                {purchaseOrders.map((po) => (
                   <tr key={po.id} className="border-t border-border hover:bg-secondary/30">
                     <td className="px-4 py-3 font-mono-num font-semibold text-primary">{po.id}</td>
                     <td className="px-4 py-3">
@@ -233,68 +251,15 @@ export default function Purchase() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => {
-                          const latest = pos.items.find(p => p.id === po.id);
-
-                          if (!latest || latest.status === "Delivered") {
-                            toast("Already received");
-                            return;
+                        onClick={async () => {
+                          try {
+                            await receivePurchase(po.id);
+                            await loadPurchaseData();
+                            toast.success("Goods received successfully");
+                          } catch (error) {
+                            console.error(error);
+                            toast.error("Failed to receive goods");
                           }
-
-                          if (!po.lines || po.lines.length === 0) {
-                            toast.error("No items in PO");
-                            return;
-                          }
-
-                          // 1. Mark delivered
-                          pos.update(po.id, { ...po, status: "Delivered" });
-
-                          let totalValue = 0;
-
-                          // 2. Update stock
-                            po.lines.forEach((line) => {
-                              const p = productsStore.items.find((x) => x.sku === line.sku);
-                              if (p) {
-                                productsStore.update(p.id, {
-                                  stock: p.stock + line.qty,
-                                });
-
-                                addStockLedgerEntry(
-                                  createStockLedgerEntry({
-                                    sku: line.sku,
-                                    productName: line.name,
-                                    qty: line.qty,
-                                    direction: "IN",
-                                    reason: "PURCHASE_RECEIVE",
-                                    refId: po.id,
-                                    note: `Received from ${po.supplier}`,
-                                  })
-                                );
-                              }
-
-                              totalValue += line.qty * line.price;
-                            });
-
-                          // 3. Update supplier outstanding
-                          const supplier = sup.items.find((s) => s.name === po.supplier);
-                          if (supplier) {
-                            sup.update(supplier.id, {
-                              outstanding: (supplier.outstanding || 0) + totalValue,
-                            });
-                          }
-
-                          // 4. Add journal entry (Purchase expense)
-                          journalStore.add({
-                            id: newId("J"),
-                            date: new Date().toLocaleDateString(),
-                            desc: `Purchase received · ${po.supplier}`,
-                            debit: totalValue,
-                            credit: 0,
-                            type: "PURCHASE",
-                            refId: po.id,
-                          });
-
-                          toast.success("Goods received + stock updated");
                         }}
                       >
                         Receive
@@ -302,7 +267,7 @@ export default function Purchase() {
                     </td>
                   </tr>
                 ))}
-                {pos.items.length === 0 && (
+                {purchaseOrders.length === 0 && (
                   <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground text-sm">No purchase orders yet.</td></tr>
                 )}
               </tbody>
@@ -316,12 +281,15 @@ export default function Purchase() {
             <Button size="sm" variant="ghost" className="text-primary text-xs" onClick={() => {
               const name = window.prompt("Supplier name?");
               if (!name) return;
-              sup.add({ id: newId("SUP"), name, outstanding: 0, leadDays: 3, rating: 4.5 });
-              toast.success("Supplier added");
+
+              createSupplier(name)
+                .then(loadPurchaseData)
+                .then(() => toast.success("Supplier added"))
+                .catch(() => toast.error("Failed to add supplier"));
             }}>+ Add</Button>
           </div>
           <div className="space-y-3">
-            {sup.items.map((s) => (
+            {suppliers.map((s) => (
               <div key={s.id} className="p-3 rounded-xl border border-border hover:border-primary/30 hover:shadow-soft transition-smooth group">
                 <div className="flex items-start justify-between mb-1">
                   <div className="font-semibold text-sm">{s.name}</div>
@@ -334,7 +302,7 @@ export default function Purchase() {
                       variant="ghost"
                       className="h-6 w-6 opacity-0 group-hover:opacity-100 text-destructive"
                       onClick={() => {
-                        const hasPO = pos.items.some((p) => p.supplier === s.name);
+                        const hasPO = purchaseOrders.some((p) => p.supplier === s.name);
                         if (hasPO) {
                           toast.error("Cannot delete supplier with transactions");
                           return;
@@ -363,38 +331,29 @@ export default function Purchase() {
                     size="sm"
                     variant="outline"
                     className="w-full"
-                    onClick={() => {
-                      const raw = window.prompt(`Enter payment amount for ${s.name}`, String(s.outstanding || 0));
+                    onClick={async () => {
+                      const raw = window.prompt(
+                        `Enter payment amount for ${s.name}`,
+                        String(s.outstanding || 0)
+                      );
+
                       if (!raw) return;
 
                       const amount = Number(raw) || 0;
+
                       if (amount <= 0) {
                         toast.error("Enter valid amount");
                         return;
                       }
 
-                      if (amount > (s.outstanding || 0)) {
-                        toast.error("Amount exceeds outstanding");
-                        return;
+                      try {
+                        await paySupplier(Number(s.id), amount);
+                        await loadPurchaseData();
+                        toast.success(`Payment recorded for ${s.name}`);
+                      } catch (error) {
+                        console.error(error);
+                        toast.error("Failed to record supplier payment");
                       }
-
-                      const applied = amount;
-
-                      sup.update(s.id, {
-                        outstanding: Math.max(0, (s.outstanding || 0) - applied),
-                      });
-
-                      journalStore.add({
-                        id: newId("J"),
-                        date: new Date().toLocaleDateString(),
-                        desc: `Payment to ${s.name}`,
-                        debit: 0,
-                        credit: applied,
-                        type: "SUPPLIER_PAYMENT",
-                        refId: s.id,
-                      });
-
-                      toast.success(`Payment recorded for ${s.name}`);
                     }}
                   >
                     Pay supplier
@@ -415,12 +374,44 @@ export default function Purchase() {
           <div className="grid gap-3 py-2">
             <div className="grid gap-1.5">
               <Label>Supplier</Label>
-              <Select value={form.supplier} onValueChange={(v) => setForm({ ...form, supplier: v })}>
-                <SelectTrigger><SelectValue placeholder="Choose supplier" /></SelectTrigger>
-                <SelectContent>
-                  {sup.items.map((s) => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+
+              <div className="flex gap-2">
+                <Select
+                  value={form.supplier}
+                  onValueChange={(v) => setForm({ ...form, supplier: v })}
+                >
+                  <SelectTrigger className="flex-1">
+                    <SelectValue placeholder="Choose supplier" />
+                  </SelectTrigger>
+
+                  <SelectContent>
+                    {suppliers.map((s) => (
+                      <SelectItem key={s.id} value={s.name}>
+                        {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    const name = window.prompt("Supplier name?");
+                    if (!name) return;
+
+                    createSupplier(name)
+                      .then(async () => {
+                        await loadPurchaseData();
+                        setForm({ ...form, supplier: name });
+                        toast.success("Supplier added");
+                      })
+                      .catch(() => toast.error("Failed"));
+                  }}
+                >
+                  +
+                </Button>
+              </div>
             </div>
             <div className="grid gap-3">
               <div className="grid gap-1.5">
@@ -433,7 +424,7 @@ export default function Purchase() {
                     <SelectValue placeholder="Choose product" />
                   </SelectTrigger>
                   <SelectContent>
-                    {productsStore.items.map((p) => (
+                    {products.map((p) => (
                       <SelectItem key={p.sku} value={p.sku}>
                         {p.name}
                       </SelectItem>

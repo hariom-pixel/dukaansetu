@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,8 @@ import { toast } from "sonner";
 import { upsertCustomerFromSale } from "@/domain/customer";
 import { createJournalEntry } from "@/domain/accounting";
 import { addStockLedgerEntry, createStockLedgerEntry } from "@/lib/stockLedger";
+import { createSale } from "@/services/pos-db.service";
+import { getAllProducts, type ProductRow } from "@/services/product-db.service";
 
 interface CartItem {
   sku: string;
@@ -85,7 +87,6 @@ type ReceiptState = {
 };
 
 export default function POS() {
-  const products = useLocalStore<Product>("erp.products", POS_PRODUCTS);
   const invoices = useLocalStore<Invoice>("erp.invoices", RECENT_INVOICES);
   const customersStore = useLocalStore("erp.customers", []);
   const journalStore = useLocalStore("erp.journal", []);
@@ -112,6 +113,7 @@ export default function POS() {
 
   const [discountValue, setDiscountValue] = useState(0);
   const [discountType, setDiscountType] = useState<"percent" | "flat">("percent");
+  const [products, setProducts] = useState<ProductRow[]>([]);
 
   const currentCustomer = {
     name: customerName.trim() || "Walk-in",
@@ -122,18 +124,18 @@ export default function POS() {
     const q = query.trim().toLowerCase();
 
     if (!q) {
-      return products.items.slice(0, 8);
+      return products.slice(0, 8);
     }
 
-    return products.items.filter(
+    return products.filter(
       (p) =>
         p.name.toLowerCase().includes(q) ||
         p.sku.toLowerCase().includes(q) ||
         (p.barcode ?? "").toLowerCase().includes(q)
     );
-  }, [products.items, query]);
+  }, [products, query]);
 
-  const add = (p: Product) => {
+  const add = (p: ProductRow) => {
      const existing = cart.find((i) => i.sku === p.sku);
       const qty = existing ? existing.qty + 1 : 1;
 
@@ -158,7 +160,7 @@ export default function POS() {
         .map((i) => {
           if (i.sku !== sku) return i;
 
-          const product = products.items.find((p) => p.sku === sku);
+          const product = products.find((p) => p.sku === sku);
           const nextQty = Math.max(0, i.qty + d);
 
           if (d > 0 && product && nextQty > product.stock) {
@@ -212,14 +214,14 @@ export default function POS() {
       );
     }, [customersStore.items, customerQuery]);
 
-  const charge = () => {
+  const charge = async () => {
     if (cart.length === 0) {
       toast.error("Cart is empty");
       return;
     }
 
     for (const ci of cart) {
-      const prod = products.items.find((p) => p.sku === ci.sku)
+      const prod = products.find((p) => p.sku === ci.sku)
 
       if (!prod || prod.stock < ci.qty) {
         toast.error(`Stock issue for ${ci.name}`)
@@ -229,36 +231,32 @@ export default function POS() {
 
     const id = newId("INV");
 
-    invoices.add({
-      id,
-      customer: currentCustomer.name,
-      channel: "POS",
-      amount: total,
-      status: saleMode === "credit" ? "Credit" : "Paid",
-      time: new Date().toISOString(),
-      items: cart,
-      subtotal,
-      discount,
-      discountValue: safeDiscountValue,
-      discountType,
-      tax,
-      gstRate: safeGstRate,
-      total,
-      paymentMode,
-      gstMode,
-      paidAmount: saleMode === "credit" ? 0 : total,
-      dueAmount: saleMode === "credit" ? total : 0,
-      payments: saleMode === "credit"
-        ? []
-        : [
-            {
-              id: `PAY-${Date.now()}`,
-              date: new Date().toLocaleDateString(),
-              amount: total,
-              mode: paymentMode,
-            },
-          ],
-    });
+    try {
+      await createSale(
+        {
+          id,
+          customerName: currentCustomer.name,
+          customerPhone: currentCustomer.phone,
+          subtotal,
+          discount,
+          discountValue: safeDiscountValue,
+          discountType,
+          tax,
+          gstRate: safeGstRate,
+          gstMode,
+          total,
+          paymentMode,
+          saleMode,
+        },
+        cart
+      );
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to save bill");
+      return;
+    }
+
+    await loadProducts();
 
     if (currentCustomer.name && currentCustomer.name !== "Walk-in") {
       const updatedCustomer = upsertCustomerFromSale(
@@ -277,26 +275,7 @@ export default function POS() {
       }
     }
 
-    cart.forEach((ci) => {
-      const prod = products.items.find((p) => p.sku === ci.sku);
-      if (prod) {
-        products.update(prod.id, {
-          stock: Math.max(0, prod.stock - ci.qty),
-        });
-
-        addStockLedgerEntry(
-          createStockLedgerEntry({
-            sku: ci.sku,
-            productName: ci.name,
-            qty: ci.qty,
-            direction: "OUT",
-            reason: "SALE",
-            refId: id,
-            note: `Sold to ${currentCustomer.name || "Walk-in"}`,
-          })
-        );
-      }
-    });
+    // Stock is now reduced inside SQLite createSale()
 
     if (activeHoldId) {
       setHeld(held.filter((h) => h.id !== activeHoldId));
@@ -426,6 +405,15 @@ export default function POS() {
     if (!receipt) return;
     await shareReceiptText(receipt);
   };
+
+  async function loadProducts() {
+    const rows = await getAllProducts();
+    setProducts(rows);
+  }
+
+  useEffect(() => {
+    loadProducts().catch(console.error);
+  }, []);
 
   return (
     <>
