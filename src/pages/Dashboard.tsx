@@ -1,13 +1,10 @@
-import { useMemo, useState, useEffect} from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/PageHeader'
 import { StatCard } from '@/components/StatCard'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Progress } from '@/components/ui/progress'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Input } from '@/components/ui/input'
 import {
   Banknote,
   ShoppingBag,
@@ -18,7 +15,6 @@ import {
   Calendar,
   Sparkles,
   ArrowUpRight,
-  Clock,
   ChevronLeft,
 } from 'lucide-react'
 import {
@@ -32,30 +28,22 @@ import {
   PieChart,
   Pie,
   Cell,
-  Legend,
 } from 'recharts'
-import {
-  KPIS,
-  BRANCHES,
-  EXPIRING,
-  APPROVALS,
-  fmtINR,
-  type Product,
-  type Invoice,
-} from '@/lib/mockData'
+import { fmtINR, type Product, type Invoice } from '@/lib/mockData'
 import { useLocalStore } from '@/hooks/useLocalStore'
-import { getDashboardStats } from "@/services/dashboard.service";
+import { getDashboardStats } from '@/services/dashboard.service'
+import { getAllSales } from '@/services/sales-db.service'
 
 export default function Dashboard() {
   const products = useLocalStore<Product>('erp.products', [])
   const invoices = useLocalStore<Invoice>('erp.invoices', [])
-  const journal = useLocalStore<any>('erp.journal', [])
 
   const [datePickerOpen, setDatePickerOpen] = useState(false)
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().slice(0, 10)
   )
-  const [stats, setStats] = useState<any>(null);
+  const [stats, setStats] = useState<any>(null)
+  const [recentInvoices, setRecentInvoices] = useState<any[]>([])
   const [calendarMonth, setCalendarMonth] = useState(new Date())
 
   const today = useMemo(() => new Date(selectedDate), [selectedDate])
@@ -80,40 +68,14 @@ export default function Dashboard() {
       if (!inv.time) return false
       return isSameDay(String(inv.time))
     })
-  }, [activeInvoices])
+  }, [activeInvoices, today])
 
   const todaySales = useMemo(() => {
     return todaysInvoices.reduce((sum, inv) => sum + Number(inv.amount || 0), 0)
   }, [todaysInvoices])
 
-  const outstanding = useMemo(() => {
-    return activeInvoices.reduce(
-      (sum, inv: any) => sum + Number(inv.dueAmount || 0),
-      0
-    )
-  }, [activeInvoices])
-
-  const liveRecentInvoices = useMemo(() => {
-    return [...activeInvoices].sort(
-  (a, b) => new Date(String(b.time)).getTime() - new Date(String(a.time)).getTime()).slice(0, 6)
-  }, [activeInvoices])
-
-  const liveLowStock = useMemo(() => {
-    return [...products.items]
-      .filter((p) => Number(p.stock) <= 20)
-      .sort((a, b) => Number(a.stock) - Number(b.stock))
-      .slice(0, 4)
-      .map((p) => ({
-        sku: p.sku,
-        name: p.name,
-        qty: p.stock,
-        reorder: 20,
-        branch: 'Main store',
-      }))
-  }, [products.items])
-
   const yesterdaySales = useMemo(() => {
-    const yesterday = new Date()
+    const yesterday = new Date(today)
     yesterday.setDate(today.getDate() - 1)
 
     return activeInvoices
@@ -131,43 +93,27 @@ export default function Dashboard() {
       .reduce((sum, inv) => sum + Number(inv.amount || 0), 0)
   }, [activeInvoices, today])
 
-  const trend = yesterdaySales === 0 ? todaySales > 0 ? 100 : 0 : ((todaySales - yesterdaySales) / yesterdaySales) * 100
+  const trend =
+    yesterdaySales === 0
+      ? todaySales > 0
+        ? 100
+        : 0
+      : ((todaySales - yesterdaySales) / yesterdaySales) * 100
 
-  const cashInHand = useMemo(() => {
-    return journal.items.reduce((sum, entry: any) => {
-      const desc = String(entry.desc || "").toLowerCase()
-      const type = String(entry.type || "").toUpperCase()
-
-      const credit = Number(entry.credit || 0)
-      const debit = Number(entry.debit || 0)
-
-      const isCashIn =
-        desc.includes("sale") ||
-        desc.includes("invoice payment") ||
-        type === "SALE" ||
-        type === "PAYMENT"
-
-      const isCashOut =
-        desc.includes("refund") ||
-        desc.includes("payment to") ||
-        desc.includes("void invoice") ||
-        type === "REFUND" ||
-        type === "SUPPLIER_PAYMENT"
-
-      if (isCashIn) return sum + credit
-      if (isCashOut) return sum - debit - credit
-
-      return sum
-    }, 0)
-  }, [journal.items])
-
-  const onlineOrders = useMemo(() => {
-    return activeInvoices.filter((inv) => String(inv.channel).toLowerCase() === 'online').length
+  const liveRecentInvoices = useMemo(() => {
+    return [...activeInvoices]
+      .sort(
+        (a, b) =>
+          new Date(String(b.time)).getTime() -
+          new Date(String(a.time)).getTime()
+      )
+      .slice(0, 6)
   }, [activeInvoices])
 
   const weeklySalesTrend = useMemo(() => {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    const result = Array.from({ length: 7 }).map((_, idx) => {
+
+    return Array.from({ length: 7 }).map((_, idx) => {
       const d = new Date(today)
       d.setDate(today.getDate() - (6 - idx))
 
@@ -191,8 +137,6 @@ export default function Dashboard() {
         ret: 0,
       }
     })
-
-    return result
   }, [activeInvoices, today])
 
   const channelMix = useMemo(() => {
@@ -219,77 +163,57 @@ export default function Dashboard() {
     }))
   }, [activeInvoices])
 
-  const topProducts = useMemo(() => {
-    const map = new Map<string, { name: string; qty: number; revenue: number }>()
-
-    activeInvoices.forEach((inv: any) => {
-      ;(inv.items || []).forEach((item: any) => {
-        const prev = map.get(item.sku)
-
-        if (prev) {
-          prev.qty += Number(item.qty || 0)
-          prev.revenue += Number(item.qty || 0) * Number(item.price || 0)
-        } else {
-          map.set(item.sku, {
-            name: item.name,
-            qty: Number(item.qty || 0),
-            revenue: Number(item.qty || 0) * Number(item.price || 0),
-          })
-        }
-      })
-    })
-
-    return Array.from(map.entries())
-      .map(([sku, v]) => ({
-        sku,
-        name: v.name,
-        qty: v.qty,
-        revenue: v.revenue,
-      }))
-      .sort((a, b) => b.qty - a.qty)
-      .slice(0, 6)
-  }, [activeInvoices])
-
-  const paidInvoicesCount = useMemo(() => {
-    return activeInvoices.filter((inv) => inv.status === 'Paid').length
-  }, [activeInvoices])
-
-  const creditInvoicesCount = useMemo(() => {
-    return activeInvoices.filter((inv) => inv.status === 'Credit').length
-  }, [activeInvoices])
-
-  const lowStockCount = useMemo(() => {
-    return products.items.filter((p) => Number(p.stock) <= 20).length
+  const inventoryValue = useMemo(() => {
+    return products.items.reduce(
+      (sum, p) => sum + Number(p.stock || 0) * Number(p.price || 0),
+      0
+    )
   }, [products.items])
 
-  const cashTrend =
-    cashInHand > 0 ? 8 : 0
+  const selectedDateLabel = today.toLocaleDateString(undefined, {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  })
 
-  const onlineTrend =
-    onlineOrders > 0 ? 22 : 0
+  const monthLabel = calendarMonth.toLocaleDateString(undefined, {
+    month: 'long',
+    year: 'numeric',
+  })
 
-  const outstandingTrend =
-    outstanding > 0 ? -3 : 0
+  const calendarDays = useMemo(() => {
+    const year = calendarMonth.getFullYear()
+    const month = calendarMonth.getMonth()
+    const firstDay = new Date(year, month, 1)
+    const lastDay = new Date(year, month + 1, 0)
+    const startOffset = firstDay.getDay()
+    const days: Array<Date | null> = []
 
-  const salesHint =
-    yesterdaySales === 0
-      ? 'first activity vs yesterday'
-      : `vs ${fmtINR(yesterdaySales)} yesterday`
+    for (let i = 0; i < startOffset; i++) days.push(null)
+    for (let d = 1; d <= lastDay.getDate(); d++) {
+      days.push(new Date(year, month, d))
+    }
 
-  const cashHint = `${paidInvoicesCount} paid invoices`
-  const onlineHint = `${onlineOrders} online invoices`
-  const outstandingHint = `${creditInvoicesCount} credit invoices`
+    return days
+  }, [calendarMonth])
+
+  const toDateInputValue = (date: Date) => {
+    const y = date.getFullYear()
+    const m = String(date.getMonth() + 1).padStart(2, '0')
+    const d = String(date.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
 
   const exportDashboard = () => {
     const rows = [
       ['Metric', 'Value'],
-      ["Today's Sales", todaySales],
-      ['Cash in Hand', cashInHand],
-      ['Online Orders', onlineOrders],
-      ['Outstanding', outstanding],
-      ['Paid Invoices', paidInvoicesCount],
-      ['Credit Invoices', creditInvoicesCount],
-      ['Low Stock Items', lowStockCount],
+      ["Today's Sales", stats?.todaySales || 0],
+      ["Today's Purchase", stats?.todayPurchase || 0],
+      ['Today Profit', (stats?.todaySales || 0) - (stats?.todayPurchase || 0)],
+      ['Inventory Value', inventoryValue],
+      ['Low Stock Items', stats?.lowStock?.length || 0],
+      ['Customer Due', stats?.customerDue || 0],
+      ['Supplier Payable', stats?.supplierDue || 0],
     ]
 
     const csv = rows.map((r) => r.join(',')).join('\n')
@@ -305,57 +229,26 @@ export default function Dashboard() {
     toast.success('Dashboard exported')
   }
 
-  const monthLabel = calendarMonth.toLocaleDateString(undefined, {
-    month: 'long',
-    year: 'numeric',
-  })
-
-  const calendarDays = useMemo(() => {
-    const year = calendarMonth.getFullYear()
-    const month = calendarMonth.getMonth()
-
-    const firstDay = new Date(year, month, 1)
-    const lastDay = new Date(year, month + 1, 0)
-    const startOffset = firstDay.getDay()
-
-    const days: Array<Date | null> = []
-
-    for (let i = 0; i < startOffset; i++) {
-      days.push(null)
-    }
-
-    for (let d = 1; d <= lastDay.getDate(); d++) {
-      days.push(new Date(year, month, d))
-    }
-
-    return days
-  }, [calendarMonth])
-
-  const toDateInputValue = (date: Date) => {
-    const y = date.getFullYear()
-    const m = String(date.getMonth() + 1).padStart(2, '0')
-    const d = String(date.getDate()).padStart(2, '0')
-    return `${y}-${m}-${d}`
-  }
-
-  const selectedDateLabel = today.toLocaleDateString(undefined, {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  })
-
   useEffect(() => {
-    getDashboardStats()
-      .then(setStats)
-      .catch(console.error);
-  }, []);
+      async function loadDashboard() {
+        const [dashboardStats, salesRows] = await Promise.all([
+          getDashboardStats(),
+          getAllSales(),
+        ])
+
+        setStats(dashboardStats)
+        setRecentInvoices(salesRows.slice(0, 6))
+      }
+
+      loadDashboard().catch(console.error)
+  }, [])
 
   return (
     <>
       <PageHeader
-        eyebrow='Owner cockpit · Mumbai HQ'
+        eyebrow='Owner cockpit'
         title='Good morning, Hariom 👋'
-        subtitle="Here's how your business is performing across 5 branches today."
+        subtitle='Live view of sales, stock, cash flow, and owner actions.'
         actions={
           <>
             <div className='relative'>
@@ -378,7 +271,11 @@ export default function Dashboard() {
                       className='h-8 w-8 rounded-full'
                       onClick={() =>
                         setCalendarMonth(
-                          new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1)
+                          new Date(
+                            calendarMonth.getFullYear(),
+                            calendarMonth.getMonth() - 1,
+                            1
+                          )
                         )
                       }
                     >
@@ -395,7 +292,11 @@ export default function Dashboard() {
                       className='h-8 w-8 rounded-full'
                       onClick={() =>
                         setCalendarMonth(
-                          new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1)
+                          new Date(
+                            calendarMonth.getFullYear(),
+                            calendarMonth.getMonth() + 1,
+                            1
+                          )
                         )
                       }
                     >
@@ -437,186 +338,75 @@ export default function Dashboard() {
                       )
                     })}
                   </div>
-
-                  <div className='grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-border'>
-                    <Button
-                      size='sm'
-                      variant='outline'
-                      className='text-xs'
-                      onClick={() => {
-                        const d = new Date()
-                        setSelectedDate(toDateInputValue(d))
-                        setCalendarMonth(d)
-                        setDatePickerOpen(false)
-                      }}
-                    >
-                      Today
-                    </Button>
-
-                    <Button
-                      size='sm'
-                      variant='outline'
-                      className='text-xs'
-                      onClick={() => {
-                        const d = new Date()
-                        d.setDate(d.getDate() - 1)
-                        setSelectedDate(toDateInputValue(d))
-                        setCalendarMonth(d)
-                        setDatePickerOpen(false)
-                      }}
-                    >
-                      Yesterday
-                    </Button>
-
-                    <Button
-                      size='sm'
-                      variant='outline'
-                      className='text-xs'
-                      onClick={() => setDatePickerOpen(false)}
-                    >
-                      Close
-                    </Button>
-                  </div>
                 </div>
               )}
             </div>
-            <Button variant='outline' size='sm' className='gap-1.5' onClick={exportDashboard}>
-              <Download className='h-4 w-4' /> Export
-            </Button>            
+
             <Button
+              variant='outline'
               size='sm'
-              className='bg-gradient-primary shadow-glow gap-1.5'
+              className='gap-1.5'
+              onClick={exportDashboard}
             >
+              <Download className='h-4 w-4' /> Export
+            </Button>
+
+            <Button size='sm' className='bg-gradient-primary shadow-glow gap-1.5'>
               <Sparkles className='h-4 w-4' /> Ask AI
             </Button>
           </>
         }
       />
 
-      {/* KPI grid */}
+      {/* Owner KPI grid */}
       <div className='grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6'>
         <StatCard
           label="Today's Sales"
           value={fmtINR(stats?.todaySales || 0)}
           icon={Banknote}
           delta={Number(trend.toFixed(1))}
-          hint={salesHint}
+          hint='sales today'
           accent='primary'
         />
 
         <StatCard
-          label='Today Purchase'
-          value={fmtINR(stats?.todayPurchase || 0)}
+          label='Today Profit'
+          value={fmtINR((stats?.todaySales || 0) - (stats?.todayPurchase || 0))}
           icon={Wallet}
-          delta={cashTrend}
-          hint={cashHint}
+          delta={0}
+          hint='sales minus stock-in'
           accent='success'
         />
 
         <StatCard
-          label='Customer Due'
-          value={fmtINR(stats?.customerDue || 0)}
+          label='Inventory Value'
+          value={fmtINR(inventoryValue)}
           icon={ShoppingBag}
-          delta={onlineTrend}
-          hint={onlineHint}
+          delta={0}
+          hint='current stock value'
           accent='accent'
         />
 
         <StatCard
-          label='Supplier Payable'
-          value={fmtINR(stats?.supplierDue || 0)}
+          label='Low Stock'
+          value={String(stats?.lowStock?.length || 0)}
           icon={AlertTriangle}
-          delta={outstandingTrend}
-          hint={outstandingHint}
+          delta={0}
+          hint='items need reorder'
           accent='warning'
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-        <Card className="relative overflow-hidden p-5 border border-border/70 shadow-soft rounded-2xl bg-gradient-to-br from-card to-secondary/30">
-          <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Today Profit</div>
-          <div className="mt-2 text-3xl font-display font-extrabold">
-            {fmtINR((stats?.todaySales || 0) - (stats?.todayPurchase || 0))}
-          </div>
-          <div className="mt-2 text-xs text-muted-foreground">
-            Sales minus purchases for today
-          </div>
-        </Card>
-
-        <Card className="relative overflow-hidden p-5 border border-border/70 shadow-soft rounded-2xl bg-gradient-to-br from-card to-primary/5">
-          <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Net Credit Position</div>
-          <div className="mt-2 text-3xl font-display font-extrabold">
-            {fmtINR((stats?.customerDue || 0) - (stats?.supplierDue || 0))}
-          </div>
-          <div className="mt-2 text-xs text-muted-foreground">
-            Customer dues minus supplier payables
-          </div>
-        </Card>
-
-        <Card className="relative overflow-hidden p-5 border border-border/70 shadow-soft rounded-2xl bg-gradient-to-br from-card to-success/5">
-          <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Inventory Value</div>
-          <div className="mt-2 text-3xl font-display font-extrabold">
-            {fmtINR(
-              products.items.reduce(
-                (sum, p) => sum + Number(p.stock || 0) * Number(p.price || 0),
-                0
-              )
-            )}
-          </div>
-          <div className="mt-2 text-xs text-muted-foreground">
-            Current stock value at selling price
-          </div>
-        </Card>
-      </div>
-
-      <div className='grid grid-cols-1 md:grid-cols-3 gap-3 mb-6'>
-        <Card className='p-4 border border-border/60 shadow-soft'>
-          <div className='text-xs uppercase tracking-wide text-muted-foreground mb-1'>
-            Billing health
-          </div>
-          <div className='text-sm font-medium'>
-            {paidInvoicesCount} paid · {creditInvoicesCount} credit
-          </div>
-          <div className='text-xs text-muted-foreground mt-1'>
-            Sales mix for active invoices
-          </div>
-        </Card>
-
-        <Card className='p-4 border border-border/60 shadow-soft'>
-          <div className='text-xs uppercase tracking-wide text-muted-foreground mb-1'>
-            Inventory alert
-          </div>
-          <div className='text-sm font-medium'>
-            {lowStockCount} low-stock items
-          </div>
-          <div className='text-xs text-muted-foreground mt-1'>
-            Reorder attention needed
-          </div>
-        </Card>
-
-        <Card className='p-4 border border-border/60 shadow-soft'>
-          <div className='text-xs uppercase tracking-wide text-muted-foreground mb-1'>
-            Receivables health
-          </div>
-          <div className='text-sm font-medium'>
-            {fmtINR(outstanding)} pending
-          </div>
-          <div className='text-xs text-muted-foreground mt-1'>
-            Collected through invoice dues
-          </div>
-        </Card>
-      </div>
-
-      {/* Charts row */}
+      {/* Main analytics */}
       <div className='grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6'>
-        <Card className='lg:col-span-2 p-5 shadow-soft border-border/60'>
+        <Card className='lg:col-span-2 p-5 shadow-soft border-border/60 rounded-2xl'>
           <div className='flex items-start justify-between mb-4'>
             <div>
               <h3 className='font-display font-bold text-lg'>
                 Weekly sales trend
               </h3>
               <p className='text-xs text-muted-foreground'>
-                Net sales vs returns · last 7 days
+                Net sales for the last 7 days
               </p>
             </div>
             <Badge
@@ -629,38 +419,17 @@ export default function Dashboard() {
                   : 'bg-muted text-muted-foreground border-border'
               }
             >
-              {trend > 0 ? '+' : ''}{trend.toFixed(1)}%
+              {trend > 0 ? '+' : ''}
+              {trend.toFixed(1)}%
             </Badge>
           </div>
-          <ResponsiveContainer width='100%' height={260}>
-            <AreaChart
-              data={weeklySalesTrend}
-              margin={{ left: -20, right: 8, top: 8 }}
-            >
+
+          <ResponsiveContainer width='100%' height={280}>
+            <AreaChart data={weeklySalesTrend} margin={{ left: -20, right: 8, top: 8 }}>
               <defs>
                 <linearGradient id='g1' x1='0' y1='0' x2='0' y2='1'>
-                  <stop
-                    offset='0%'
-                    stopColor='hsl(16 78% 52%)'
-                    stopOpacity={0.4}
-                  />
-                  <stop
-                    offset='100%'
-                    stopColor='hsl(16 78% 52%)'
-                    stopOpacity={0}
-                  />
-                </linearGradient>
-                <linearGradient id='g2' x1='0' y1='0' x2='0' y2='1'>
-                  <stop
-                    offset='0%'
-                    stopColor='hsl(38 88% 56%)'
-                    stopOpacity={0.3}
-                  />
-                  <stop
-                    offset='100%'
-                    stopColor='hsl(38 88% 56%)'
-                    stopOpacity={0}
-                  />
+                  <stop offset='0%' stopColor='hsl(16 78% 52%)' stopOpacity={0.4} />
+                  <stop offset='100%' stopColor='hsl(16 78% 52%)' stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid
@@ -698,135 +467,96 @@ export default function Dashboard() {
                 strokeWidth={2.5}
                 fill='url(#g1)'
               />
-              <Area
-                type='monotone'
-                dataKey='ret'
-                name='Returns'
-                stroke='hsl(38 88% 56%)'
-                strokeWidth={2}
-                fill='url(#g2)'
-              />
             </AreaChart>
           </ResponsiveContainer>
         </Card>
 
-        <Card className='p-5 shadow-soft border-border/60'>
-          <h3 className='font-display font-bold text-lg mb-1'>Channel mix</h3>
-          <p className='text-xs text-muted-foreground mb-2'>
-            Where revenue comes from
-          </p>
-          <ResponsiveContainer width='100%' height={220}>
-            <PieChart>
-              <Pie
-                data={channelMix}
-                dataKey='value'
-                innerRadius={55}
-                outerRadius={85}
-                paddingAngle={3}
-              >
-                {channelMix.map((c) => (
-                  <Cell key={c.name} fill={c.color} />
-                ))}
-              </Pie>
-              <Tooltip
-                contentStyle={{
-                  background: 'hsl(var(--card))',
-                  border: '1px solid hsl(var(--border))',
-                  borderRadius: 12,
-                  fontSize: 12,
-                }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className='space-y-1.5 mt-2'>
-            {channelMix.map((c) => (
-              <div
-                key={c.name}
-                className='flex items-center justify-between text-xs'
-              >
-                <div className='flex items-center gap-2'>
-                  <span
-                    className='h-2.5 w-2.5 rounded-sm'
-                    style={{ background: c.color }}
-                  />
-                  <span className='text-muted-foreground'>{c.name}</span>
-                </div>
-                <span className='font-mono-num font-semibold'>{c.value}%</span>
+        <Card className='p-5 shadow-soft border-border/60 rounded-2xl'>
+          <div className='mb-4'>
+            <h3 className='font-display font-bold text-lg'>Cash Flow</h3>
+            <p className='text-xs text-muted-foreground'>
+              Money movement today
+            </p>
+          </div>
+
+          <div className='space-y-3'>
+            <div className='rounded-xl border border-border/70 bg-secondary/30 p-4'>
+              <div className='text-xs uppercase tracking-wide text-muted-foreground'>
+                Cash In
               </div>
-            ))}
+              <div className='mt-1 text-2xl font-bold text-success'>
+                {fmtINR(stats?.todaySales || 0)}
+              </div>
+              <div className='text-xs text-muted-foreground'>From sales</div>
+            </div>
+
+            <div className='rounded-xl border border-border/70 bg-secondary/30 p-4'>
+              <div className='text-xs uppercase tracking-wide text-muted-foreground'>
+                Cash Out
+              </div>
+              <div className='mt-1 text-2xl font-bold text-destructive'>
+                {fmtINR(stats?.todayPurchase || 0)}
+              </div>
+              <div className='text-xs text-muted-foreground'>Purchases / stock-in</div>
+            </div>
+
+            <div className='rounded-xl border border-border/70 bg-secondary/30 p-4'>
+              <div className='text-xs uppercase tracking-wide text-muted-foreground'>
+                Net Cash
+              </div>
+              <div className='mt-1 text-2xl font-bold'>
+                {fmtINR((stats?.todaySales || 0) - (stats?.todayPurchase || 0))}
+              </div>
+              <div className='text-xs text-muted-foreground'>In minus out</div>
+            </div>
           </div>
         </Card>
       </div>
 
-      <Card className="p-5 mb-6 border border-border/70 shadow-soft rounded-2xl">
-        <div className="flex items-start justify-between mb-5">
-          <div>
-            <h3 className="font-display font-bold text-lg">Cash Flow Snapshot</h3>
-            <p className="text-xs text-muted-foreground">Quick view of money movement today</p>
-          </div>
-          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
-            Today
-          </Badge>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="rounded-xl border border-border/70 bg-secondary/30 p-4">
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Cash In</div>
-            <div className="mt-2 text-2xl font-bold text-success">
-              {fmtINR(stats?.todaySales || 0)}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">From sales</div>
-          </div>
-
-          <div className="rounded-xl border border-border/70 bg-secondary/30 p-4">
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Cash Out</div>
-            <div className="mt-2 text-2xl font-bold text-destructive">
-              {fmtINR(stats?.todayPurchase || 0)}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">Purchases / stock-in</div>
-          </div>
-
-          <div className="rounded-xl border border-border/70 bg-secondary/30 p-4">
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Net Cash</div>
-            <div className="mt-2 text-2xl font-bold">
-              {fmtINR((stats?.todaySales || 0) - (stats?.todayPurchase || 0))}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">In minus out</div>
-          </div>
-        </div>
-      </Card>
-
-      {/* Bottom row */}
-      <div className='grid grid-cols-1 lg:grid-cols-3 gap-4'>
-        <Card className='lg:col-span-2 p-5 shadow-soft border-border/60'>
+      {/* Action dashboard */}
+      <div className='grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6'>
+        <Card className='lg:col-span-2 p-5 shadow-soft border-border/60 rounded-2xl'>
           <div className='flex items-center justify-between mb-4'>
-            <h3 className='font-display font-bold text-lg'>Recent invoices</h3>
-            <Button variant='ghost' size='sm' className='text-primary gap-1'>
+            <div>
+              <h3 className='font-display font-bold text-lg'>Recent invoices</h3>
+              <p className='text-xs text-muted-foreground'>Latest bills from POS</p>
+            </div>
+            <Button
+              variant='ghost'
+              size='sm'
+              className='text-primary gap-1'
+              onClick={() => {
+                window.location.href = '/sales'
+              }}
+            >
               All invoices <ChevronRight className='h-4 w-4' />
             </Button>
           </div>
-          <div className='overflow-x-auto -mx-2'>
+
+          <div className='overflow-x-auto'>
             <table className='w-full text-sm'>
               <thead>
                 <tr className='text-xs text-muted-foreground uppercase tracking-wider'>
                   <th className='text-left font-medium px-2 py-2'>Invoice</th>
                   <th className='text-left font-medium px-2 py-2'>Customer</th>
-                  <th className='text-left font-medium px-2 py-2 hidden md:table-cell'>
-                    Channel
-                  </th>
+                  <th className='text-left font-medium px-2 py-2'>Channel</th>
                   <th className='text-right font-medium px-2 py-2'>Amount</th>
                   <th className='text-left font-medium px-2 py-2'>Status</th>
                 </tr>
               </thead>
+
               <tbody>
-                {liveRecentInvoices.length === 0 ? (
+                {recentInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className='px-2 py-8 text-center text-sm text-muted-foreground'>
+                    <td
+                      colSpan={5}
+                      className='px-2 py-8 text-center text-sm text-muted-foreground'
+                    >
                       No invoices yet. Start billing from POS.
                     </td>
                   </tr>
                 ) : (
-                  liveRecentInvoices.map((inv) => (
+                  recentInvoices.map((inv) => (
                     <tr
                       key={inv.id}
                       className='border-t border-border/60 hover:bg-secondary/40'
@@ -835,9 +565,7 @@ export default function Dashboard() {
                         {inv.id}
                       </td>
                       <td className='px-2 py-3'>{inv.customer}</td>
-                      <td className='px-2 py-3 hidden md:table-cell text-muted-foreground'>
-                        {inv.channel}
-                      </td>
+                      <td className='px-2 py-3 text-muted-foreground'>{inv.channel}</td>
                       <td className='px-2 py-3 text-right font-mono-num font-semibold'>
                         {fmtINR(inv.amount)}
                       </td>
@@ -847,8 +575,6 @@ export default function Dashboard() {
                           className={
                             inv.status === 'Paid'
                               ? 'bg-success/10 text-success border-success/30'
-                              : inv.status === 'Pending'
-                              ? 'bg-warning/10 text-warning border-warning/30'
                               : inv.status === 'Voided'
                               ? 'bg-slate-100 text-slate-700 border-slate-200'
                               : 'bg-accent/10 text-accent-foreground border-accent/30'
@@ -865,91 +591,71 @@ export default function Dashboard() {
           </div>
         </Card>
 
-        <div className='space-y-4'>
-          <Card className='p-5 shadow-soft border-border/60'>
-            <div className='flex items-center justify-between mb-3'>
-              <h3 className='font-display font-bold text-base'>Low stock</h3>
-              <Badge className='bg-warning/15 text-warning border-0'>
-                {stats?.lowStock?.length}
-              </Badge>
+        <Card className='p-5 shadow-soft border-border/60 rounded-2xl'>
+          <div className='flex items-center justify-between mb-4'>
+            <div>
+              <h3 className='font-display font-bold text-lg'>Reorder Needed</h3>
+              <p className='text-xs text-muted-foreground'>Low-stock products</p>
             </div>
-            <div className='space-y-2'>
-              {stats?.lowStock?.length === 0 ? (
-                <div className='text-sm text-muted-foreground'>
-                  No low-stock items right now.
-                </div>
-              ) : (
-                stats?.lowStock?.map((p) => (
-                  <div
-                    key={p.sku}
-                    className='flex items-center justify-between text-sm'
-                  >
-                    <div className='min-w-0'>
-                      <div className='font-medium truncate'>{p.name}</div>
-                      <div className='text-xs text-muted-foreground'>
-                        Reorder at {p.reorder_level}
-                      </div>
-                    </div>
-                    <div className='text-right shrink-0'>
-                      <div className='font-mono-num font-bold text-destructive'>
-                        {p.stock}
-                      </div>
-                      <div className='text-[10px] text-muted-foreground'>
-                        /{p.reorder_level}
-                      </div>
+
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => {
+                window.location.href = '/purchase'
+              }}
+            >
+              Create PO
+            </Button>
+          </div>
+
+          <div className='space-y-3'>
+            {(stats?.lowStock?.length || 0) === 0 ? (
+              <div className='text-sm text-muted-foreground'>
+                No low-stock items right now.
+              </div>
+            ) : (
+              stats.lowStock.map((p: any) => (
+                <div
+                  key={p.name}
+                  className='flex items-center justify-between rounded-xl border border-border/70 bg-secondary/30 p-3'
+                >
+                  <div>
+                    <div className='font-semibold text-sm'>{p.name}</div>
+                    <div className='text-xs text-muted-foreground'>
+                      Stock {p.stock} · Reorder at {p.reorder_level}
                     </div>
                   </div>
-                ))
-              )}
-            </div>
-          </Card>
-        </div>
+
+                  <Button
+                    size='sm'
+                    variant='ghost'
+                    className='text-primary'
+                    onClick={() => {
+                      window.location.href = '/purchase'
+                    }}
+                  >
+                    Buy
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
       </div>
 
-      <Card className="p-5 shadow-soft border border-border/70 rounded-2xl mb-4">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="font-display font-bold text-lg">Owner Alerts</h3>
-            <p className="text-xs text-muted-foreground">Important things to check today</p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="rounded-xl border border-border/70 p-4 bg-secondary/25">
-            <div className="text-sm font-semibold">Customer dues</div>
-            <div className="mt-1 text-xl font-bold">{fmtINR(stats?.customerDue || 0)}</div>
-            <div className="text-xs text-muted-foreground mt-1">Follow up pending payments</div>
-          </div>
-
-          <div className="rounded-xl border border-border/70 p-4 bg-secondary/25">
-            <div className="text-sm font-semibold">Supplier payables</div>
-            <div className="mt-1 text-xl font-bold">{fmtINR(stats?.supplierDue || 0)}</div>
-            <div className="text-xs text-muted-foreground mt-1">Payments due to suppliers</div>
-          </div>
-
-          <div className="rounded-xl border border-border/70 p-4 bg-secondary/25">
-            <div className="text-sm font-semibold">Low stock</div>
-            <div className="mt-1 text-xl font-bold">{stats?.lowStock?.length || 0}</div>
-            <div className="text-xs text-muted-foreground mt-1">Items need reorder attention</div>
-          </div>
-        </div>
-      </Card>
-
       {/* Top products */}
-      <Card className='p-5 shadow-soft border-border/60 mt-4'>
+      <Card className='p-5 shadow-soft border-border/60 rounded-2xl'>
         <div className='flex items-center justify-between mb-4'>
           <div>
-            <h3 className='font-display font-bold text-lg'>
-              Top moving products
-            </h3>
-            <p className='text-xs text-muted-foreground'>
-              By units sold this week
-            </p>
+            <h3 className='font-display font-bold text-lg'>Top moving products</h3>
+            <p className='text-xs text-muted-foreground'>By units sold</p>
           </div>
           <Button variant='ghost' size='sm' className='text-primary gap-1'>
             Full report <ArrowUpRight className='h-4 w-4' />
           </Button>
         </div>
+
         {(stats?.topProducts?.length || 0) === 0 ? (
           <div className='text-sm text-muted-foreground'>
             No product movement yet.
@@ -967,10 +673,7 @@ export default function Dashboard() {
                   </div>
 
                   <div className='flex-1 min-w-0'>
-                    <div className='font-semibold text-sm truncate'>
-                      {p.name}
-                    </div>
-
+                    <div className='font-semibold text-sm truncate'>{p.name}</div>
                     <div className='text-[11px] text-muted-foreground'>
                       Sold: {p.sold}
                     </div>
