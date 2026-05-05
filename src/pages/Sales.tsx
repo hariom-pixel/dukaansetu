@@ -258,7 +258,6 @@ export default function Sales() {
             <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="day" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
             <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `${v / 1000}k`} />
-            <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 12, fontSize: 12 }} />
             <Bar dataKey="pos" stackId="a" fill="hsl(217 91% 60%)" />
             <Bar dataKey="b2b" stackId="a" fill="hsl(38 92% 50%)" />
             <Bar dataKey="online" stackId="a" fill="hsl(168 76% 36%)" radius={[8, 8, 0, 0]} />

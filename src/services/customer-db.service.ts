@@ -1,8 +1,9 @@
 import { getDb } from '@/lib/db'
 
 export type CustomerRow = {
-  id: string
+  id: number
   name: string
+  phone?: string
   spent: number
   visits: number
   outstanding: number
@@ -17,34 +18,116 @@ function getTier(spent: number): CustomerRow['loyalty'] {
   return 'Bronze'
 }
 
+export async function findOrCreateCustomer(input: {
+  name: string
+  phone?: string
+}) {
+  const db = await getDb()
+
+  const name = input.name.trim()
+  const phone = input.phone?.trim() || ''
+
+  if (!name || name === 'Walk-in') return null
+
+  const rows = await db.select<any[]>(
+    `
+    SELECT id
+    FROM customers
+    WHERE
+      (phone != '' AND phone = ?)
+      OR lower(name) = lower(?)
+    LIMIT 1
+    `,
+    [phone, name]
+  )
+
+  if (rows.length > 0) {
+    await db.execute(
+      `
+      UPDATE customers
+      SET name = ?, phone = ?
+      WHERE id = ?
+      `,
+      [name, phone, rows[0].id]
+    )
+
+    return Number(rows[0].id)
+  }
+
+  await db.execute(
+    `
+    INSERT INTO customers (name, phone, balance)
+    VALUES (?, ?, 0)
+    `,
+    [name, phone]
+  )
+
+  const created = await db.select<any[]>(
+    `
+    SELECT id
+    FROM customers
+    WHERE name = ?
+      AND COALESCE(phone, '') = ?
+    ORDER BY id DESC
+    LIMIT 1
+    `,
+    [name, phone]
+  )
+
+  return Number(created[0]?.id)
+}
+
+export async function refreshCustomerBalance(customerId: number) {
+  const db = await getDb()
+
+  const rows = await db.select<any[]>(
+    `
+    SELECT COALESCE(SUM(due_amount), 0) as balance
+    FROM sales
+    WHERE customer_id = ?
+    `,
+    [customerId]
+  )
+
+  await db.execute(
+    `
+    UPDATE customers
+    SET balance = ?
+    WHERE id = ?
+    `,
+    [Number(rows[0]?.balance || 0), customerId]
+  )
+}
+
 export async function getAllCustomers(): Promise<CustomerRow[]> {
   const db = await getDb()
 
   const rows = await db.select<any[]>(
     `
     SELECT
-      customer_name as name,
-      COUNT(*) as visits,
-      COALESCE(SUM(total),0) as spent,
-      COALESCE(SUM(due_amount),0) as outstanding,
-      MAX(created_at) as lastAt
-    FROM sales
-    WHERE customer_name IS NOT NULL
-      AND customer_name != ''
-      AND customer_name != 'Walk-in'
-    GROUP BY customer_name
-    ORDER BY spent DESC
+      c.id,
+      c.name,
+      c.phone,
+      COUNT(s.id) as visits,
+      COALESCE(SUM(s.total), 0) as spent,
+      COALESCE(c.balance, 0) + COALESCE(SUM(s.due_amount), 0) as outstanding,
+      MAX(s.created_at) as lastAt
+    FROM customers c
+    LEFT JOIN sales s ON s.customer_id = c.id
+    GROUP BY c.id
+    ORDER BY spent DESC, c.name ASC
     `
   )
 
-  return rows.map((r, i) => ({
-    id: `CUST-${i + 1}`,
+  return rows.map((r) => ({
+    id: Number(r.id),
     name: r.name,
+    phone: r.phone || '',
     spent: Number(r.spent || 0),
     visits: Number(r.visits || 0),
     outstanding: Number(r.outstanding || 0),
     loyalty: getTier(Number(r.spent || 0)),
-    last: 'Recent',
+    last: r.lastAt ? 'Recent' : 'No sales yet',
   }))
 }
 
@@ -67,29 +150,30 @@ export type CustomerLedgerRow = {
 }
 
 export async function getCustomerInvoices(
-  customerName: string
+  customerId: number
 ): Promise<CustomerInvoiceRow[]> {
   const db = await getDb()
 
   return await db.select<CustomerInvoiceRow[]>(
     `
     SELECT
-      id,
-      customer_name as customer,
-      total as amount,
-      due_amount as dueAmount,
-      status,
-      datetime(created_at, 'unixepoch', 'localtime') as time
-    FROM sales
-    WHERE customer_name = ?
-    ORDER BY created_at DESC
+      s.id,
+      c.name as customer,
+      s.total as amount,
+      s.due_amount as dueAmount,
+      s.status,
+      datetime(s.created_at, 'unixepoch', 'localtime') as time
+    FROM sales s
+    LEFT JOIN customers c ON c.id = s.customer_id
+    WHERE s.customer_id = ?
+    ORDER BY s.created_at DESC
     `,
-    [customerName]
+    [customerId]
   )
 }
 
 export async function getCustomerLedger(
-  customerName: string
+  customerId: number
 ): Promise<CustomerLedgerRow[]> {
   const db = await getDb()
 
@@ -103,10 +187,10 @@ export async function getCustomerLedger(
       status,
       datetime(created_at, 'unixepoch', 'localtime') as time
     FROM sales
-    WHERE customer_name = ?
+    WHERE customer_id = ?
     ORDER BY created_at ASC
     `,
-    [customerName]
+    [customerId]
   )
 
   let balance = 0
@@ -114,6 +198,7 @@ export async function getCustomerLedger(
   return rows.map((r) => {
     const debit = Number(r.total || 0)
     const credit = Number(r.paid_amount || 0)
+
     balance += debit - credit
 
     return {
@@ -128,7 +213,7 @@ export async function getCustomerLedger(
 }
 
 export async function collectCustomerPayment(
-  customerName: string,
+  customerId: number,
   amount: number
 ) {
   const db = await getDb()
@@ -137,12 +222,12 @@ export async function collectCustomerPayment(
     `
     SELECT id, due_amount, paid_amount
     FROM sales
-    WHERE customer_name = ?
+    WHERE customer_id = ?
       AND due_amount > 0
       AND status = 'Credit'
     ORDER BY created_at ASC
     `,
-    [customerName]
+    [customerId]
   )
 
   let remaining = amount
@@ -171,5 +256,46 @@ export async function collectCustomerPayment(
     remaining -= applied
   }
 
+  await refreshCustomerBalance(customerId)
+
   return amount - remaining
+}
+
+export async function createCustomer(input: {
+  name: string
+  phone?: string
+  openingBalance?: number
+}) {
+  const db = await getDb()
+
+  const name = input.name.trim()
+  const phone = input.phone?.trim() || ''
+  const openingBalance = Number(input.openingBalance || 0)
+
+  if (!name) {
+    throw new Error('Customer name required')
+  }
+
+  const existing = await db.select<any[]>(
+    `
+    SELECT id
+    FROM customers
+    WHERE lower(name) = lower(?)
+       OR (phone != '' AND phone = ?)
+    LIMIT 1
+    `,
+    [name, phone]
+  )
+
+  if (existing.length > 0) {
+    throw new Error('Customer already exists')
+  }
+
+  await db.execute(
+    `
+    INSERT INTO customers (name, phone, balance)
+    VALUES (?, ?, ?)
+    `,
+    [name, phone, openingBalance]
+  )
 }

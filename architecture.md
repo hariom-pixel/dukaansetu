@@ -1,10 +1,3 @@
-Primary → Forest Green (actions, buttons)
-Accent → Terracotta (highlights, alerts)
-Success → Green (profit, positive)
-Warning → Amber (low stock)
-Danger → Red (loss, errors)
-Neutral → Backgrounds, borders
-
 open bill instantly
 scan barcode instantly
 print instantly

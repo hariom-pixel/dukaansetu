@@ -86,3 +86,64 @@ export async function deleteProduct(id: number) {
 
   await db.execute(`DELETE FROM products WHERE id = ?`, [id])
 }
+
+export async function getTopSellingProducts(limit = 10): Promise<ProductRow[]> {
+  const db = await getDb()
+
+  const rows = await db.select<ProductRow[]>(
+    `
+    SELECT
+      p.*
+    FROM products p
+    LEFT JOIN (
+      SELECT
+        sku,
+        SUM(qty) as sold_qty
+      FROM sale_items
+      GROUP BY sku
+    ) s ON s.sku = p.sku
+    ORDER BY
+      COALESCE(s.sold_qty, 0) DESC,
+      p.name ASC
+    LIMIT ?
+    `,
+    [limit]
+  )
+
+  return rows
+}
+
+export async function createProductFromBarcode(input: {
+  sku: string
+  name: string
+  barcode: string
+  price: number
+  stock: number
+  category?: string
+}) {
+  const db = await getDb()
+
+  await db.execute(
+    `
+    INSERT INTO products (
+      sku,
+      name,
+      barcode,
+      price,
+      stock,
+      category,
+      reorder_level
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      input.sku,
+      input.name,
+      input.barcode,
+      input.price,
+      input.stock,
+      input.category || 'General',
+      10,
+    ]
+  )
+}

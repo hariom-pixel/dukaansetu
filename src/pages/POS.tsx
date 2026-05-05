@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -29,21 +29,22 @@ import {
   Share2,
 } from "lucide-react";
 import {
-  POS_PRODUCTS,
-  RECENT_INVOICES,
   fmtINR,
-  type Product,
-  type Invoice,
 } from "@/lib/mockData";
 import { type InvoiceTemplateKey } from "@/lib/invoiceTemplates";
 import { openPrintWindow, shareReceiptText } from "@/lib/receiptActions";
-import { useLocalStore, useLocalObject, newId } from "@/hooks/useLocalStore";
+import { useLocalStore, newId } from "@/hooks/useLocalStore";
+import {
+  getHeldBills,
+  saveHeldBill,
+  deleteHeldBill,
+  type HeldBillRow,
+} from "@/services/held-bill-db.service";
 import { toast } from "sonner";
-import { upsertCustomerFromSale } from "@/domain/customer";
 import { createJournalEntry } from "@/domain/accounting";
-import { addStockLedgerEntry, createStockLedgerEntry } from "@/lib/stockLedger";
 import { createSale } from "@/services/pos-db.service";
-import { getAllProducts, type ProductRow } from "@/services/product-db.service";
+import { getAllProducts, getTopSellingProducts, debugProductStock, createProductFromBarcode, type ProductRow } from "@/services/product-db.service";
+import { getAllCustomers,findOrCreateCustomer, type CustomerRow } from "@/services/customer-db.service";
 
 interface CartItem {
   sku: string;
@@ -87,12 +88,10 @@ type ReceiptState = {
 };
 
 export default function POS() {
-  const invoices = useLocalStore<Invoice>("erp.invoices", RECENT_INVOICES);
-  const customersStore = useLocalStore("erp.customers", []);
   const journalStore = useLocalStore("erp.journal", []);
 
 
-  const [held, setHeld] = useLocalObject<HeldBill[]>("erp.heldBills", []);
+  const [held, setHeld] = useState<HeldBill[]>([]);
 
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -114,17 +113,36 @@ export default function POS() {
   const [discountValue, setDiscountValue] = useState(0);
   const [discountType, setDiscountType] = useState<"percent" | "flat">("percent");
   const [products, setProducts] = useState<ProductRow[]>([]);
+  const [quickProducts, setQuickProducts] = useState<ProductRow[]>([]);
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+
+  const [unknownBarcodeOpen, setUnknownBarcodeOpen] = useState(false);
+  const [unknownBarcode, setUnknownBarcode] = useState("");
+  const [newBarcodeProduct, setNewBarcodeProduct] = useState({
+    name: "",
+    price: "",
+    stock: "1",
+  });
+
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const scanBufferRef = useRef("");
+  const lastKeyTimeRef = useRef(0);
 
   const currentCustomer = {
     name: customerName.trim() || "Walk-in",
     phone: customerPhone.trim() || "",
   }
 
+  async function loadCustomers() {
+    const rows = await getAllCustomers();
+    setCustomers(rows);
+  }
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
 
     if (!q) {
-      return products.slice(0, 8);
+      return quickProducts;
     }
 
     return products.filter(
@@ -133,7 +151,7 @@ export default function POS() {
         p.sku.toLowerCase().includes(q) ||
         (p.barcode ?? "").toLowerCase().includes(q)
     );
-  }, [products, query]);
+  }, [products, quickProducts, query]);
 
   const add = (p: ProductRow) => {
      const existing = cart.find((i) => i.sku === p.sku);
@@ -201,18 +219,17 @@ export default function POS() {
 
     const total = taxableAmount + tax;
 
-    const customerResults = useMemo(() => {
-      const q = customerQuery.trim().toLowerCase();
-      const all = customersStore.items as any[];
+  const customerResults = useMemo(() => {
+    const q = customerQuery.trim().toLowerCase();
 
-      if (!q) return all.slice(0, 8);
+    if (!q) return customers.slice(0, 8);
 
-      return all.filter(
-        (c: any) =>
-          String(c.name || "").toLowerCase().includes(q) ||
-          String(c.phone || "").toLowerCase().includes(q)
-      );
-    }, [customersStore.items, customerQuery]);
+    return customers.filter(
+      (c) =>
+        String(c.name || "").toLowerCase().includes(q) ||
+        String(c.phone || "").toLowerCase().includes(q)
+    );
+  }, [customers, customerQuery]);
 
   const charge = async () => {
     if (cart.length === 0) {
@@ -231,10 +248,19 @@ export default function POS() {
 
     const id = newId("INV");
 
+    const customerId =
+    currentCustomer.name !== "Walk-in"
+    ? await findOrCreateCustomer({
+        name: currentCustomer.name,
+        phone: currentCustomer.phone,
+      })
+    : null;
+
     try {
       await createSale(
         {
           id,
+          customerId,
           customerName: currentCustomer.name,
           customerPhone: currentCustomer.phone,
           subtotal,
@@ -257,28 +283,12 @@ export default function POS() {
     }
 
     await loadProducts();
-
-    if (currentCustomer.name && currentCustomer.name !== "Walk-in") {
-      const updatedCustomer = upsertCustomerFromSale(
-        customersStore.items as any[],
-        currentCustomer,
-        total,
-        saleMode === "credit"
-      );
-
-      const exists = customersStore.items.find((c: any) => c.id === updatedCustomer.id);
-
-      if (exists) {
-        customersStore.update(updatedCustomer.id, { ...updatedCustomer });
-      } else {
-        customersStore.add(updatedCustomer);
-      }
-    }
-
-    // Stock is now reduced inside SQLite createSale()
+    await loadCustomers();
 
     if (activeHoldId) {
-      setHeld(held.filter((h) => h.id !== activeHoldId));
+      await deleteHeldBill(activeHoldId);
+      const rows = await getHeldBills();
+      setHeld(rows as HeldBill[]);
       setActiveHoldId(null);
     }
 
@@ -322,13 +332,14 @@ export default function POS() {
     setSaleMode("paid");
   };
 
-  const holdBill = () => {
+  const holdBill = async () => {
     if (cart.length === 0) {
       toast.error("Cart is empty");
       return;
     }
 
     const id = activeHoldId ?? newId("HOLD");
+
     const entry: HeldBill = {
       id,
       cart,
@@ -342,24 +353,30 @@ export default function POS() {
       paymentMode,
     };
 
-    const next = activeHoldId
-      ? held.map((h) => (h.id === activeHoldId ? entry : h))
-      : [entry, ...held];
+    try {
+      await saveHeldBill(entry as HeldBillRow);
 
-    setHeld(next);
-    setCart([]);
-    setActiveHoldId(null);
-    setCustomerName("");
-    setCustomerPhone("");
+      const rows = await getHeldBills();
+      setHeld(rows as HeldBill[]);
 
-    toast.success(`Bill held as ${id}`);
+      setCart([]);
+      setActiveHoldId(null);
+      setCustomerName("");
+      setCustomerPhone("");
+
+      toast.success(`Bill held as ${id}`);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to hold bill");
+    }
   };
 
-  const resumeHold = (h: HeldBill) => {
-    if (cart.length > 0 && !activeHoldId) {
-      const id = newId("HOLD");
-      setHeld([
-        {
+  const resumeHold = async (h: HeldBill) => {
+    try {
+      if (cart.length > 0 && !activeHoldId) {
+        const id = newId("HOLD");
+
+        const currentEntry: HeldBill = {
           id,
           cart,
           createdAt: new Date().toLocaleString(),
@@ -370,30 +387,46 @@ export default function POS() {
           gstMode,
           gstRate: safeGstRate,
           paymentMode,
-        },
-        ...held.filter((x) => x.id !== h.id),
-      ]);
-    } else {
-      setHeld(held.filter((x) => x.id !== h.id));
+        };
+
+        await saveHeldBill(currentEntry as HeldBillRow);
+      }
+
+      await deleteHeldBill(h.id);
+
+      const rows = await getHeldBills();
+      setHeld(rows as HeldBill[]);
+
+      setCart(h.cart);
+      setCustomerName(h.customerName || "");
+      setCustomerPhone(h.customerPhone || "");
+      setActiveHoldId(h.id);
+      setHoldsOpen(false);
+      setDiscountValue(h.discountValue ?? 0);
+      setDiscountType(h.discountType ?? "percent");
+      setGstMode(h.gstMode ?? "with");
+      setGstRate(h.gstRate ?? 5);
+      setPaymentMode(h.paymentMode ?? "UPI");
+
+      toast.success(`Resumed ${h.id}`);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to resume held bill");
     }
-
-    setCart(h.cart);
-    setCustomerName(h.customerName || "");
-    setCustomerPhone(h.customerPhone || "");
-    setActiveHoldId(h.id);
-    setHoldsOpen(false);
-    setDiscountValue(h.discountValue ?? 0);
-    setDiscountType(h.discountType ?? "percent");
-    setGstMode(h.gstMode ?? "with");
-    setGstRate(h.gstRate ?? 5);
-    setPaymentMode(h.paymentMode ?? "UPI");
-
-    toast.success(`Resumed ${h.id}`);
   };
 
-  const deleteHold = (id: string) => {
-    setHeld(held.filter((h) => h.id !== id));
-    toast.success(`Removed ${id}`);
+  const deleteHold = async (id: string) => {
+    try {
+      await deleteHeldBill(id);
+
+      const rows = await getHeldBills();
+      setHeld(rows as HeldBill[]);
+
+      toast.success(`Removed ${id}`);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to remove held bill");
+    }
   };
 
   const printReceipt = () => {
@@ -407,13 +440,157 @@ export default function POS() {
   };
 
   async function loadProducts() {
-    const rows = await getAllProducts();
-    setProducts(rows);
+    const [allRows, topRows] = await Promise.all([
+      getAllProducts(),
+      getTopSellingProducts(8),
+    ]);
+
+    setProducts(allRows);
+    setQuickProducts(topRows.length > 0 ? topRows : allRows.slice(0, 8));
   }
 
   useEffect(() => {
     loadProducts().catch(console.error);
+    loadCustomers().catch(console.error);
+
+    getHeldBills()
+      .then((rows) => setHeld(rows as HeldBill[]))
+      .catch(console.error);
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const now = Date.now();
+      const timeDiff = now - lastKeyTimeRef.current;
+      lastKeyTimeRef.current = now;
+
+      // Fast typing = scanner
+      if (timeDiff < 50) {
+        if (e.key === "Enter") {
+          const scanned = scanBufferRef.current.trim().toLowerCase();
+          scanBufferRef.current = "";
+
+          if (!scanned) return;
+
+          const exactMatch = products.find(
+            (p) =>
+              String(p.barcode || "").toLowerCase() === scanned ||
+              String(p.sku || "").toLowerCase() === scanned
+          );
+
+          if (exactMatch) {
+            add(exactMatch);
+            toast.success(`${exactMatch.name} added`);
+          } else {
+            setUnknownBarcode(scanned);
+            setNewBarcodeProduct({
+              name: "",
+              price: "",
+              stock: "1",
+            });
+            setUnknownBarcodeOpen(true);
+            toast.error("Barcode not found. Add product details.");
+          }
+
+          // Clear visible input also
+          setQuery("");
+          return;
+        }
+
+        if (e.key.length === 1) {
+          scanBufferRef.current += e.key;
+        }
+      } else {
+        // Slow typing = human → reset buffer
+        scanBufferRef.current = "";
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [products]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 100);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  const saveUnknownBarcodeProduct = async () => {
+    const name = newBarcodeProduct.name.trim();
+    const price = Number(newBarcodeProduct.price) || 0;
+    const stock = Number(newBarcodeProduct.stock) || 0;
+
+    if (!unknownBarcode.trim()) {
+      toast.error("Barcode missing");
+      return;
+    }
+
+    if (!name) {
+      toast.error("Product name required");
+      return;
+    }
+
+    if (price <= 0) {
+      toast.error("Enter valid price");
+      return;
+    }
+
+    if (stock < 0) {
+      toast.error("Enter valid stock");
+      return;
+    }
+
+    const sku = `SKU-${unknownBarcode}`;
+
+    try {
+      await createProductFromBarcode({
+        sku,
+        name,
+        barcode: unknownBarcode,
+        price,
+        stock,
+        category: "General",
+      });
+
+      await loadProducts();
+
+      const createdProduct: ProductRow = {
+        id: Date.now() as any,
+        sku,
+        name,
+        barcode: unknownBarcode,
+        price,
+        stock,
+        category: "General",
+        reorder_level: 10,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any;
+
+      add(createdProduct);
+
+      setUnknownBarcodeOpen(false);
+      setUnknownBarcode("");
+      setNewBarcodeProduct({
+        name: "",
+        price: "",
+        stock: "1",
+      });
+
+      toast.success(`${name} added and placed in cart`);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to create product");
+    }
+  };
 
   return (
     <>
@@ -438,8 +615,7 @@ export default function POS() {
               variant="outline"
               className="border-success/30 bg-success/10 text-success gap-1.5"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-success" /> Drawer
-              #2 open
+              <span className="h-1.5 w-1.5 rounded-full bg-success" /> Live
             </Badge>
           </div>
         }
@@ -456,56 +632,85 @@ export default function POS() {
               <Input
                 autoFocus
                 placeholder="Search item or scan barcode"
+                ref={searchInputRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 className="pl-11 h-11 text-sm font-medium border border-border focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:shadow-sm rounded-lg bg-background"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && filtered.length > 0) {
-                    add(filtered[0]);
+                  if (e.key !== "Enter") return;
+
+                  const scanned = query.trim().toLowerCase();
+
+                  const exactMatch =
+                    products.find(
+                      (p) =>
+                        String(p.barcode || "").toLowerCase() === scanned ||
+                        String(p.sku || "").toLowerCase() === scanned
+                    ) || filtered[0];
+
+                  if (exactMatch) {
+                    add(exactMatch);
                     toast.success("Item added");
+                  } else {
+                    setUnknownBarcode(scanned);
+                    setNewBarcodeProduct({
+                      name: "",
+                      price: "",
+                      stock: "1",
+                    });
+                    setUnknownBarcodeOpen(true);
+                    toast.error("Barcode not found. Add product.");
                   }
                 }}
               />
             </div>
 
-            <Button size="sm" variant="outline" className="w-full justify-center gap-1.5 h-9 text-sm">
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full justify-center gap-1.5 h-9 text-sm"
+              onClick={() => setQuery("")}
+            >
               <Search className="h-4 w-4" /> Browse all items
             </Button>
           </div>
           </Card>
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold text-foreground">Products</h4>
+            <h4 className="text-sm font-semibold text-foreground">
+              {query.trim() ? "Search results" : "Frequently sold"}
+            </h4>
             <span className="text-xs text-muted-foreground">
               {query.trim() ? `${filtered.length} results` : `Top ${filtered.length} items`}
             </span>
           </div>
-          <Card className="p-4 border border-border rounded-xl bg-card">
-          <div className="grid grid-cols-2 xl:grid-cols-2 gap-4">
-            {filtered.map((p) => (
-              <button
-                key={p.sku}
-                onClick={() => add(p)}
-                className="group text-left p-3 rounded-xl border border-border bg-card hover:bg-secondary/40 hover:border-primary hover:shadow-sm hover:scale-[1.02] transition-all duration-150 min-h-[118px]"
-              >
-                <div className="h-12 mb-2 rounded-lg bg-secondary/70 flex items-center justify-center">
-                  <span className="font-display font-bold text-[30px] text-primary/35">
-                    {p.name.slice(0, 2).toUpperCase()}
-                  </span>
-                </div>
-                <div className="font-medium text-[13px] text-foreground leading-5 line-clamp-2 min-h-[2.4rem]">
-                  {p.name}
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="font-mono-num font-bold text-primary">
-                    {fmtINR(p.price)}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground font-mono-num">
-                    {p.stock} in stock
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
+          <Card className="p-3 border border-border rounded-xl bg-card">
+            <div className="grid grid-cols-1 gap-2">
+              {filtered.map((p) => (
+                <button
+                  key={p.sku}
+                  onClick={() => add(p)}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2 text-left hover:bg-secondary/40 hover:border-primary transition-all active:scale-[0.99]"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-foreground truncate">
+                      {p.name}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground font-mono-num">
+                      {p.sku}
+                    </div>
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <div className="font-mono-num font-bold text-primary text-sm">
+                      {fmtINR(p.price)}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">
+                      Stock {p.stock}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
           </Card>
         </div>
 
@@ -1042,6 +1247,87 @@ export default function POS() {
             </Button>
             <Button onClick={printReceipt} className="gap-1.5">
               <Printer className="h-4 w-4" /> Print
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={unknownBarcodeOpen} onOpenChange={setUnknownBarcodeOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Unknown barcode</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border border-border bg-secondary/30 p-3 text-sm">
+              Barcode:{" "}
+              <span className="font-mono-num font-semibold">
+                {unknownBarcode}
+              </span>
+            </div>
+
+            <div className="grid gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground">
+                Product name
+              </label>
+              <Input
+                autoFocus
+                value={newBarcodeProduct.name}
+                onChange={(e) =>
+                  setNewBarcodeProduct({
+                    ...newBarcodeProduct,
+                    name: e.target.value,
+                  })
+                }
+                placeholder="e.g. Amul Milk 500ml"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Selling price
+                </label>
+                <Input
+                  type="number"
+                  value={newBarcodeProduct.price}
+                  onChange={(e) =>
+                    setNewBarcodeProduct({
+                      ...newBarcodeProduct,
+                      price: e.target.value,
+                    })
+                  }
+                  placeholder="₹"
+                />
+              </div>
+
+              <div className="grid gap-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Opening stock
+                </label>
+                <Input
+                  type="number"
+                  value={newBarcodeProduct.stock}
+                  onChange={(e) =>
+                    setNewBarcodeProduct({
+                      ...newBarcodeProduct,
+                      stock: e.target.value,
+                    })
+                  }
+                />
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setUnknownBarcodeOpen(false)}
+            >
+              Cancel
+            </Button>
+
+            <Button onClick={saveUnknownBarcodeProduct}>
+              Save & add to cart
             </Button>
           </DialogFooter>
         </DialogContent>

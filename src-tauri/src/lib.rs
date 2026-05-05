@@ -17,86 +17,87 @@ pub fn run() {
       tauri_plugin_sql::Builder::default()
         .add_migrations(
           DB_URL,
-          vec![tauri_plugin_sql::Migration {
-            version: 1,
-            description: "create initial tables",
-            sql: r#"
-              CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sku TEXT NOT NULL UNIQUE,
-                name TEXT NOT NULL,
-                barcode TEXT,
-                price REAL NOT NULL DEFAULT 0,
-                stock INTEGER NOT NULL DEFAULT 0,
-                category TEXT,
-                reorder_level INTEGER NOT NULL DEFAULT 20,
-                created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-                updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-              );
+          vec![
+            tauri_plugin_sql::Migration {
+              version: 1,
+              description: "create initial tables",
+              sql: r#"
+                CREATE TABLE IF NOT EXISTS products (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  sku TEXT NOT NULL UNIQUE,
+                  name TEXT NOT NULL,
+                  barcode TEXT,
+                  price REAL NOT NULL DEFAULT 0,
+                  stock INTEGER NOT NULL DEFAULT 0,
+                  category TEXT,
+                  reorder_level INTEGER NOT NULL DEFAULT 20,
+                  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                  updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+                );
 
-              CREATE TABLE IF NOT EXISTS sales (
-                id TEXT PRIMARY KEY,
-                customer_name TEXT NOT NULL DEFAULT 'Walk-in',
-                customer_phone TEXT,
-                channel TEXT NOT NULL DEFAULT 'POS',
-                subtotal REAL NOT NULL DEFAULT 0,
-                discount REAL NOT NULL DEFAULT 0,
-                discount_value REAL NOT NULL DEFAULT 0,
-                discount_type TEXT NOT NULL DEFAULT 'percent',
-                tax REAL NOT NULL DEFAULT 0,
-                gst_rate REAL NOT NULL DEFAULT 0,
-                gst_mode TEXT NOT NULL DEFAULT 'with',
-                total REAL NOT NULL DEFAULT 0,
-                payment_mode TEXT NOT NULL DEFAULT 'Cash',
-                sale_mode TEXT NOT NULL DEFAULT 'paid',
-                paid_amount REAL NOT NULL DEFAULT 0,
-                due_amount REAL NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT 'Paid',
-                created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-              );
+                CREATE TABLE IF NOT EXISTS sales (
+                  id TEXT PRIMARY KEY,
+                  customer_name TEXT NOT NULL DEFAULT 'Walk-in',
+                  customer_phone TEXT,
+                  channel TEXT NOT NULL DEFAULT 'POS',
+                  subtotal REAL NOT NULL DEFAULT 0,
+                  discount REAL NOT NULL DEFAULT 0,
+                  discount_value REAL NOT NULL DEFAULT 0,
+                  discount_type TEXT NOT NULL DEFAULT 'percent',
+                  tax REAL NOT NULL DEFAULT 0,
+                  gst_rate REAL NOT NULL DEFAULT 0,
+                  gst_mode TEXT NOT NULL DEFAULT 'with',
+                  total REAL NOT NULL DEFAULT 0,
+                  payment_mode TEXT NOT NULL DEFAULT 'Cash',
+                  sale_mode TEXT NOT NULL DEFAULT 'paid',
+                  paid_amount REAL NOT NULL DEFAULT 0,
+                  due_amount REAL NOT NULL DEFAULT 0,
+                  status TEXT NOT NULL DEFAULT 'Paid',
+                  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+                );
 
-              CREATE TABLE IF NOT EXISTS sale_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sale_id TEXT NOT NULL,
-                product_id INTEGER,
-                sku TEXT NOT NULL,
-                name TEXT NOT NULL,
-                price REAL NOT NULL,
-                qty INTEGER NOT NULL,
-                line_total REAL NOT NULL,
-                FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
-                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
-              );
+                CREATE TABLE IF NOT EXISTS sale_items (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  sale_id TEXT NOT NULL,
+                  product_id INTEGER,
+                  sku TEXT NOT NULL,
+                  name TEXT NOT NULL,
+                  price REAL NOT NULL,
+                  qty INTEGER NOT NULL,
+                  line_total REAL NOT NULL,
+                  FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
+                  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
+                );
 
-              CREATE TABLE IF NOT EXISTS held_bills (
-                id TEXT PRIMARY KEY,
-                payload_json TEXT NOT NULL,
-                created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-              );
+                CREATE TABLE IF NOT EXISTS held_bills (
+                  id TEXT PRIMARY KEY,
+                  payload_json TEXT NOT NULL,
+                  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+                );
 
-              CREATE TABLE IF NOT EXISTS stock_movements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_id INTEGER,
-                sku TEXT NOT NULL,
-                product_name TEXT NOT NULL,
-                qty INTEGER NOT NULL,
-                direction TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                ref_id TEXT,
-                note TEXT,
-                created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
-              );
+                CREATE TABLE IF NOT EXISTS stock_movements (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  product_id INTEGER,
+                  sku TEXT NOT NULL,
+                  product_name TEXT NOT NULL,
+                  qty INTEGER NOT NULL,
+                  direction TEXT NOT NULL,
+                  reason TEXT NOT NULL,
+                  ref_id TEXT,
+                  note TEXT,
+                  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
+                );
 
-              CREATE TABLE IF NOT EXISTS customers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                phone TEXT,
-                balance REAL NOT NULL DEFAULT 0
-              );
-            "#,
-            kind: tauri_plugin_sql::MigrationKind::Up,
-          },
+                CREATE TABLE IF NOT EXISTS customers (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  name TEXT NOT NULL,
+                  phone TEXT,
+                  balance REAL NOT NULL DEFAULT 0
+                );
+              "#,
+              kind: tauri_plugin_sql::MigrationKind::Up,
+            },
             tauri_plugin_sql::Migration {
               version: 2,
               description: "purchase tables",
@@ -127,6 +128,37 @@ pub fn run() {
                   qty INTEGER NOT NULL,
                   price REAL NOT NULL
                 );
+              "#,
+              kind: tauri_plugin_sql::MigrationKind::Up,
+            },
+            tauri_plugin_sql::Migration {
+              version: 3,
+              description: "customer master and sales customer id",
+              sql: r#"
+                ALTER TABLE sales ADD COLUMN customer_id INTEGER;
+
+                INSERT INTO customers (name, phone, balance)
+                SELECT
+                  customer_name,
+                  customer_phone,
+                  COALESCE(SUM(due_amount), 0)
+                FROM sales
+                WHERE customer_name IS NOT NULL
+                  AND customer_name != ''
+                  AND customer_name != 'Walk-in'
+                GROUP BY customer_name, customer_phone;
+
+                UPDATE sales
+                SET customer_id = (
+                  SELECT c.id
+                  FROM customers c
+                  WHERE c.name = sales.customer_name
+                    AND COALESCE(c.phone, '') = COALESCE(sales.customer_phone, '')
+                  LIMIT 1
+                )
+                WHERE customer_name IS NOT NULL
+                  AND customer_name != ''
+                  AND customer_name != 'Walk-in';
               "#,
               kind: tauri_plugin_sql::MigrationKind::Up,
             },

@@ -66,6 +66,12 @@ export default function Purchase() {
   const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
+  const [addSupplierOpen, setAddSupplierOpen] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState("");
+
+  const [payOpen, setPayOpen] = useState(false);
+  const [paySupplierRow, setPaySupplierRow] = useState<any | null>(null);
+  const [payAmount, setPayAmount] = useState("");
 
   // const productsStore = useLocalStore<Product>("erp.products", []);
   const journalStore = useLocalStore("erp.journal", []);
@@ -278,15 +284,7 @@ export default function Purchase() {
         <Card className="p-5 shadow-soft border-border/60">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-display font-bold text-lg">Top suppliers</h3>
-            <Button size="sm" variant="ghost" className="text-primary text-xs" onClick={() => {
-              const name = window.prompt("Supplier name?");
-              if (!name) return;
-
-              createSupplier(name)
-                .then(loadPurchaseData)
-                .then(() => toast.success("Supplier added"))
-                .catch(() => toast.error("Failed to add supplier"));
-            }}>+ Add</Button>
+            <Button size="sm" variant="ghost" className="text-primary text-xs" onClick={() => setAddSupplierOpen(true)}>+ Add</Button>
           </div>
           <div className="space-y-3">
             {suppliers.map((s) => (
@@ -297,22 +295,6 @@ export default function Purchase() {
                     <Badge variant="outline" className="bg-accent/10 text-accent-foreground border-accent/30 gap-1 text-[10px]">
                       <Star className="h-3 w-3 fill-current" /> {s.rating}
                     </Badge>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-6 w-6 opacity-0 group-hover:opacity-100 text-destructive"
-                      onClick={() => {
-                        const hasPO = purchaseOrders.some((p) => p.supplier === s.name);
-                        if (hasPO) {
-                          toast.error("Cannot delete supplier with transactions");
-                          return;
-                        }
-                        sup.remove(s.id);
-                        toast.success("Supplier deleted");
-                      }}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
@@ -331,29 +313,10 @@ export default function Purchase() {
                     size="sm"
                     variant="outline"
                     className="w-full"
-                    onClick={async () => {
-                      const raw = window.prompt(
-                        `Enter payment amount for ${s.name}`,
-                        String(s.outstanding || 0)
-                      );
-
-                      if (!raw) return;
-
-                      const amount = Number(raw) || 0;
-
-                      if (amount <= 0) {
-                        toast.error("Enter valid amount");
-                        return;
-                      }
-
-                      try {
-                        await paySupplier(Number(s.id), amount);
-                        await loadPurchaseData();
-                        toast.success(`Payment recorded for ${s.name}`);
-                      } catch (error) {
-                        console.error(error);
-                        toast.error("Failed to record supplier payment");
-                      }
+                    onClick={() => {
+                      setPaySupplierRow(s);
+                      setPayAmount(String(s.outstanding || 0));
+                      setPayOpen(true);
                     }}
                   >
                     Pay supplier
@@ -396,18 +359,7 @@ export default function Purchase() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => {
-                    const name = window.prompt("Supplier name?");
-                    if (!name) return;
-
-                    createSupplier(name)
-                      .then(async () => {
-                        await loadPurchaseData();
-                        setForm({ ...form, supplier: name });
-                        toast.success("Supplier added");
-                      })
-                      .catch(() => toast.error("Failed"));
-                  }}
+                  onClick={() => setAddSupplierOpen(true)}
                 >
                   +
                 </Button>
@@ -476,6 +428,122 @@ export default function Purchase() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
             <Button className="bg-gradient-primary" onClick={submit}>{editing ? "Save changes" : "Create PO"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={addSupplierOpen} onOpenChange={setAddSupplierOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add supplier</DialogTitle>
+            <DialogDescription>
+              Add a new supplier for purchase orders.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-2 space-y-3">
+            <Input
+              autoFocus
+              value={newSupplierName}
+              onChange={(e) => setNewSupplierName(e.target.value)}
+              placeholder="Supplier name"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddSupplierOpen(false)}>
+              Cancel
+            </Button>
+
+            <Button
+              onClick={async () => {
+                if (!newSupplierName.trim()) {
+                  toast.error("Supplier name required");
+                  return;
+                }
+
+                try {
+                  await createSupplier(newSupplierName.trim());
+                  await loadPurchaseData();
+                  toast.success("Supplier added");
+
+                  setNewSupplierName("");
+                  setAddSupplierOpen(false);
+                } catch (e) {
+                  toast.error("Failed to add supplier");
+                }
+              }}
+            >
+              Add supplier
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={payOpen} onOpenChange={setPayOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Pay supplier</DialogTitle>
+            <DialogDescription>
+              Record payment against supplier outstanding.
+            </DialogDescription>
+          </DialogHeader>
+
+          {paySupplierRow && (
+            <div className="space-y-4 py-2">
+              <div className="border rounded-lg p-3 bg-secondary/30">
+                <div className="font-semibold">{paySupplierRow.name}</div>
+                <div className="text-xs text-muted-foreground">
+                  Outstanding: {fmtINR(paySupplierRow.outstanding || 0)}
+                </div>
+              </div>
+
+              <Input
+                type="number"
+                value={payAmount}
+                onChange={(e) => setPayAmount(e.target.value)}
+                placeholder="Enter amount"
+              />
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPayOpen(false)}>
+              Cancel
+            </Button>
+
+            <Button
+              onClick={async () => {
+                if (!paySupplierRow) return;
+
+                const amt = Number(payAmount) || 0;
+
+                if (amt <= 0) {
+                  toast.error("Enter valid amount");
+                  return;
+                }
+
+                if (amt > Number(paySupplierRow.outstanding || 0)) {
+                  toast.error("Amount exceeds outstanding");
+                  return;
+                }
+
+                try {
+                  await paySupplier(Number(paySupplierRow.id), amt);
+                  await loadPurchaseData();
+
+                  toast.success("Payment recorded");
+
+                  setPayOpen(false);
+                  setPaySupplierRow(null);
+                  setPayAmount("");
+                } catch (e) {
+                  toast.error("Failed to pay supplier");
+                }
+              }}
+            >
+              Pay
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

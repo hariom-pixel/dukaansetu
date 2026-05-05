@@ -17,41 +17,60 @@ export function StatCard({
   accent?: 'primary' | 'accent' | 'success' | 'warning'
 }) {
   const accentMap = {
-    primary: 'bg-primary/10 text-primary ring-1 ring-primary/10',
-    accent: 'bg-accent/15 text-accent-foreground ring-1 ring-accent/20',
-    success: 'bg-success/10 text-success ring-1 ring-success/10',
-    warning: 'bg-warning/10 text-warning ring-1 ring-warning/10',
+    primary: {
+      rail: 'bg-primary',
+      icon: 'bg-primary/10 text-primary ring-1 ring-primary/15',
+      chip: 'bg-primary/10 text-primary',
+    },
+    accent: {
+      rail: 'bg-accent',
+      icon: 'bg-accent/10 text-accent ring-1 ring-accent/20',
+      chip: 'bg-accent/10 text-accent',
+    },
+    success: {
+      rail: 'bg-success',
+      icon: 'bg-success/10 text-success ring-1 ring-success/15',
+      chip: 'bg-success/10 text-success',
+    },
+    warning: {
+      rail: 'bg-warning',
+      icon: 'bg-warning/10 text-warning ring-1 ring-warning/15',
+      chip: 'bg-warning/10 text-warning',
+    },
   }
 
   const deltaValue = Number((delta ?? 0).toFixed(1))
   const positive = deltaValue > 0
   const negative = deltaValue < 0
-  const neutral = deltaValue === 0
 
   return (
-    <Card className='group p-5 border border-border/70 bg-card shadow-soft hover:shadow-card hover:-translate-y-[1px] transition-all duration-200'>
-      <div className='flex items-start justify-between gap-3'>
+    <Card className='group relative overflow-hidden rounded-2xl border border-border/60 bg-card p-5 shadow-soft transition-all duration-200 hover:-translate-y-[2px] hover:shadow-card'>
+      <div
+        className={`absolute left-0 top-0 h-full w-1 ${accentMap[accent].rail}`}
+      />
+
+      <div className='flex items-start justify-between gap-4 pl-1'>
         <div className='min-w-0'>
-          <div className='text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground'>
+          <div className='text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground'>
             {label}
+          </div>
+
+          <div className='mt-3 font-display text-[30px] leading-none font-extrabold tracking-tight text-foreground font-mono-num'>
+            {value}
           </div>
         </div>
 
         <div
-          className={`h-10 w-10 shrink-0 rounded-xl ${accentMap[accent]} flex items-center justify-center transition-transform duration-200 group-hover:scale-105`}
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${accentMap[accent].icon} transition-transform duration-200 group-hover:scale-105`}
         >
           <Icon className='h-5 w-5' />
         </div>
       </div>
 
-      <div className='mt-3 font-display text-[30px] leading-none font-bold text-foreground font-mono-num tracking-tight'>
-        {value}
-      </div>
-
-      <div className='mt-3 flex items-center gap-2 flex-wrap text-xs'>
+      <div className='mt-4 flex items-center gap-2 pl-1 text-xs'>
         {delta !== undefined && (
           <span
-            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold ${
+            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-semibold ${
               positive
                 ? 'bg-success/10 text-success'
                 : negative
@@ -70,7 +89,7 @@ export function StatCard({
           </span>
         )}
 
-        {hint && <span className='text-muted-foreground'>{hint}</span>}
+        {hint && <span className='truncate text-muted-foreground'>{hint}</span>}
       </div>
     </Card>
   )

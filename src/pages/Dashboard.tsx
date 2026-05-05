@@ -21,23 +21,15 @@ import {
   Area,
   AreaChart,
   ResponsiveContainer,
-  Tooltip,
   XAxis,
   YAxis,
   CartesianGrid,
-  PieChart,
-  Pie,
-  Cell,
 } from 'recharts'
-import { fmtINR, type Product, type Invoice } from '@/lib/mockData'
-import { useLocalStore } from '@/hooks/useLocalStore'
+import { fmtINR } from '@/lib/mockData'
 import { getDashboardStats } from '@/services/dashboard.service'
 import { getAllSales } from '@/services/sales-db.service'
 
 export default function Dashboard() {
-  const products = useLocalStore<Product>('erp.products', [])
-  const invoices = useLocalStore<Invoice>('erp.invoices', [])
-
   const [datePickerOpen, setDatePickerOpen] = useState(false)
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().slice(0, 10)
@@ -48,127 +40,18 @@ export default function Dashboard() {
 
   const today = useMemo(() => new Date(selectedDate), [selectedDate])
 
-  const activeInvoices = useMemo(() => {
-    return invoices.items.filter((inv: any) => inv.status !== 'Voided')
-  }, [invoices.items])
+  const weeklySalesTrend = stats?.weeklySales || [
+    { day: 'Sun', in: 0 },
+    { day: 'Mon', in: 0 },
+    { day: 'Tue', in: 0 },
+    { day: 'Wed', in: 0 },
+    { day: 'Thu', in: 0 },
+    { day: 'Fri', in: 0 },
+    { day: 'Sat', in: 0 },
+  ]
 
-  const isSameDay = (dateStr: string) => {
-    const d = new Date(dateStr)
-    if (Number.isNaN(d.getTime())) return false
-
-    return (
-      d.getDate() === today.getDate() &&
-      d.getMonth() === today.getMonth() &&
-      d.getFullYear() === today.getFullYear()
-    )
-  }
-
-  const todaysInvoices = useMemo(() => {
-    return activeInvoices.filter((inv) => {
-      if (!inv.time) return false
-      return isSameDay(String(inv.time))
-    })
-  }, [activeInvoices, today])
-
-  const todaySales = useMemo(() => {
-    return todaysInvoices.reduce((sum, inv) => sum + Number(inv.amount || 0), 0)
-  }, [todaysInvoices])
-
-  const yesterdaySales = useMemo(() => {
-    const yesterday = new Date(today)
-    yesterday.setDate(today.getDate() - 1)
-
-    return activeInvoices
-      .filter((inv) => {
-        if (!inv.time) return false
-        const d = new Date(String(inv.time))
-        if (Number.isNaN(d.getTime())) return false
-
-        return (
-          d.getDate() === yesterday.getDate() &&
-          d.getMonth() === yesterday.getMonth() &&
-          d.getFullYear() === yesterday.getFullYear()
-        )
-      })
-      .reduce((sum, inv) => sum + Number(inv.amount || 0), 0)
-  }, [activeInvoices, today])
-
-  const trend =
-    yesterdaySales === 0
-      ? todaySales > 0
-        ? 100
-        : 0
-      : ((todaySales - yesterdaySales) / yesterdaySales) * 100
-
-  const liveRecentInvoices = useMemo(() => {
-    return [...activeInvoices]
-      .sort(
-        (a, b) =>
-          new Date(String(b.time)).getTime() -
-          new Date(String(a.time)).getTime()
-      )
-      .slice(0, 6)
-  }, [activeInvoices])
-
-  const weeklySalesTrend = useMemo(() => {
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-
-    return Array.from({ length: 7 }).map((_, idx) => {
-      const d = new Date(today)
-      d.setDate(today.getDate() - (6 - idx))
-
-      const total = activeInvoices
-        .filter((inv) => {
-          if (!inv.time) return false
-          const t = new Date(String(inv.time))
-          if (Number.isNaN(t.getTime())) return false
-
-          return (
-            t.getDate() === d.getDate() &&
-            t.getMonth() === d.getMonth() &&
-            t.getFullYear() === d.getFullYear()
-          )
-        })
-        .reduce((sum, inv) => sum + Number(inv.amount || 0), 0)
-
-      return {
-        day: days[d.getDay()],
-        in: total,
-        ret: 0,
-      }
-    })
-  }, [activeInvoices, today])
-
-  const channelMix = useMemo(() => {
-    const buckets = [
-      { name: 'POS', value: 0, color: '#f55d0a' },
-      { name: 'Online', value: 0, color: '#f4b400' },
-      { name: 'B2B', value: 0, color: '#12a36d' },
-    ]
-
-    activeInvoices.forEach((inv) => {
-      const amount = Number(inv.amount || 0)
-      const channel = String(inv.channel || '').toLowerCase()
-
-      if (channel === 'pos') buckets[0].value += amount
-      else if (channel === 'online') buckets[1].value += amount
-      else if (channel === 'b2b') buckets[2].value += amount
-    })
-
-    const total = buckets.reduce((sum, b) => sum + b.value, 0)
-
-    return buckets.map((b) => ({
-      ...b,
-      value: total ? Math.round((b.value / total) * 100) : 0,
-    }))
-  }, [activeInvoices])
-
-  const inventoryValue = useMemo(() => {
-    return products.items.reduce(
-      (sum, p) => sum + Number(p.stock || 0) * Number(p.price || 0),
-      0
-    )
-  }, [products.items])
+  const inventoryValue = Number(stats?.inventoryValue || 0)
+  const trend = Number(stats?.trend || 0)
 
   const selectedDateLabel = today.toLocaleDateString(undefined, {
     day: '2-digit',
@@ -204,6 +87,16 @@ export default function Dashboard() {
     return `${y}-${m}-${d}`
   }
 
+  async function loadDashboard() {
+    const [dashboardStats, salesRows] = await Promise.all([
+      getDashboardStats(),
+      getAllSales(),
+    ])
+
+    setStats(dashboardStats)
+    setRecentInvoices(salesRows.slice(0, 6))
+  }
+
   const exportDashboard = () => {
     const rows = [
       ['Metric', 'Value'],
@@ -230,24 +123,26 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-      async function loadDashboard() {
-        const [dashboardStats, salesRows] = await Promise.all([
-          getDashboardStats(),
-          getAllSales(),
-        ])
+    loadDashboard().catch(console.error)
 
-        setStats(dashboardStats)
-        setRecentInvoices(salesRows.slice(0, 6))
-      }
-
+    const reloadDashboard = () => {
       loadDashboard().catch(console.error)
+    }
+
+    window.addEventListener('focus', reloadDashboard)
+    window.addEventListener('visibilitychange', reloadDashboard)
+
+    return () => {
+      window.removeEventListener('focus', reloadDashboard)
+      window.removeEventListener('visibilitychange', reloadDashboard)
+    }
   }, [])
 
   return (
     <>
       <PageHeader
         eyebrow='Owner cockpit'
-        title='Good morning, Hariom 👋'
+        title='Welcome Back 👋'
         subtitle='Live view of sales, stock, cash flow, and owner actions.'
         actions={
           <>
@@ -351,14 +246,16 @@ export default function Dashboard() {
               <Download className='h-4 w-4' /> Export
             </Button>
 
-            <Button size='sm' className='bg-gradient-primary shadow-glow gap-1.5'>
+            <Button
+              size='sm'
+              className='bg-gradient-primary shadow-glow gap-1.5'
+            >
               <Sparkles className='h-4 w-4' /> Ask AI
             </Button>
           </>
         }
       />
 
-      {/* Owner KPI grid */}
       <div className='grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6'>
         <StatCard
           label="Today's Sales"
@@ -397,7 +294,6 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* Main analytics */}
       <div className='grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6'>
         <Card className='lg:col-span-2 p-5 shadow-soft border-border/60 rounded-2xl'>
           <div className='flex items-start justify-between mb-4'>
@@ -409,6 +305,7 @@ export default function Dashboard() {
                 Net sales for the last 7 days
               </p>
             </div>
+
             <Badge
               variant='outline'
               className={
@@ -424,19 +321,39 @@ export default function Dashboard() {
             </Badge>
           </div>
 
+          <div className='flex items-center gap-4 text-xs text-muted-foreground mb-3'>
+            <div className='flex items-center gap-1'>
+              <span className='h-2.5 w-2.5 rounded-full bg-primary' />
+              Sales
+            </div>
+          </div>
+
           <ResponsiveContainer width='100%' height={280}>
-            <AreaChart data={weeklySalesTrend} margin={{ left: -20, right: 8, top: 8 }}>
+            <AreaChart
+              data={weeklySalesTrend}
+              margin={{ left: -20, right: 8, top: 8 }}
+            >
               <defs>
                 <linearGradient id='g1' x1='0' y1='0' x2='0' y2='1'>
-                  <stop offset='0%' stopColor='hsl(16 78% 52%)' stopOpacity={0.4} />
-                  <stop offset='100%' stopColor='hsl(16 78% 52%)' stopOpacity={0} />
+                  <stop
+                    offset='0%'
+                    stopColor='hsl(var(--primary))'
+                    stopOpacity={0.4}
+                  />
+                  <stop
+                    offset='100%'
+                    stopColor='hsl(var(--primary))'
+                    stopOpacity={0}
+                  />
                 </linearGradient>
               </defs>
+
               <CartesianGrid
                 stroke='hsl(var(--border))'
                 strokeDasharray='3 3'
                 vertical={false}
               />
+
               <XAxis
                 dataKey='day'
                 stroke='hsl(var(--muted-foreground))'
@@ -444,26 +361,20 @@ export default function Dashboard() {
                 tickLine={false}
                 axisLine={false}
               />
+
               <YAxis
                 stroke='hsl(var(--muted-foreground))'
                 fontSize={11}
                 tickLine={false}
                 axisLine={false}
-                tickFormatter={(v) => `${v / 1000}k`}
+                tickFormatter={(v) => `${Number(v) / 1000}k`}
               />
-              <Tooltip
-                contentStyle={{
-                  background: 'hsl(var(--card))',
-                  border: '1px solid hsl(var(--border))',
-                  borderRadius: 12,
-                  fontSize: 12,
-                }}
-              />
+
               <Area
                 type='monotone'
                 dataKey='in'
                 name='Sales'
-                stroke='hsl(16 78% 52%)'
+                stroke='hsl(var(--primary))'
                 strokeWidth={2.5}
                 fill='url(#g1)'
               />
@@ -497,7 +408,9 @@ export default function Dashboard() {
               <div className='mt-1 text-2xl font-bold text-destructive'>
                 {fmtINR(stats?.todayPurchase || 0)}
               </div>
-              <div className='text-xs text-muted-foreground'>Purchases / stock-in</div>
+              <div className='text-xs text-muted-foreground'>
+                Purchases / stock-in
+              </div>
             </div>
 
             <div className='rounded-xl border border-border/70 bg-secondary/30 p-4'>
@@ -513,14 +426,18 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* Action dashboard */}
       <div className='grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6'>
         <Card className='lg:col-span-2 p-5 shadow-soft border-border/60 rounded-2xl'>
           <div className='flex items-center justify-between mb-4'>
             <div>
-              <h3 className='font-display font-bold text-lg'>Recent invoices</h3>
-              <p className='text-xs text-muted-foreground'>Latest bills from POS</p>
+              <h3 className='font-display font-bold text-lg'>
+                Recent invoices
+              </h3>
+              <p className='text-xs text-muted-foreground'>
+                Latest bills from POS
+              </p>
             </div>
+
             <Button
               variant='ghost'
               size='sm'
@@ -564,10 +481,14 @@ export default function Dashboard() {
                       <td className='px-2 py-3 font-mono-num font-semibold text-primary'>
                         {inv.id}
                       </td>
-                      <td className='px-2 py-3'>{inv.customer}</td>
-                      <td className='px-2 py-3 text-muted-foreground'>{inv.channel}</td>
+                      <td className='px-2 py-3'>
+                        {inv.customer || inv.customer_name || 'Walk-in'}
+                      </td>
+                      <td className='px-2 py-3 text-muted-foreground'>
+                        {inv.channel || 'POS'}
+                      </td>
                       <td className='px-2 py-3 text-right font-mono-num font-semibold'>
-                        {fmtINR(inv.amount)}
+                        {fmtINR(inv.amount || inv.total || 0)}
                       </td>
                       <td className='px-2 py-3'>
                         <Badge
@@ -595,7 +516,9 @@ export default function Dashboard() {
           <div className='flex items-center justify-between mb-4'>
             <div>
               <h3 className='font-display font-bold text-lg'>Reorder Needed</h3>
-              <p className='text-xs text-muted-foreground'>Low-stock products</p>
+              <p className='text-xs text-muted-foreground'>
+                Low-stock products
+              </p>
             </div>
 
             <Button
@@ -644,13 +567,15 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* Top products */}
       <Card className='p-5 shadow-soft border-border/60 rounded-2xl'>
         <div className='flex items-center justify-between mb-4'>
           <div>
-            <h3 className='font-display font-bold text-lg'>Top moving products</h3>
+            <h3 className='font-display font-bold text-lg'>
+              Top moving products
+            </h3>
             <p className='text-xs text-muted-foreground'>By units sold</p>
           </div>
+
           <Button variant='ghost' size='sm' className='text-primary gap-1'>
             Full report <ArrowUpRight className='h-4 w-4' />
           </Button>
@@ -673,7 +598,9 @@ export default function Dashboard() {
                   </div>
 
                   <div className='flex-1 min-w-0'>
-                    <div className='font-semibold text-sm truncate'>{p.name}</div>
+                    <div className='font-semibold text-sm truncate'>
+                      {p.name}
+                    </div>
                     <div className='text-[11px] text-muted-foreground'>
                       Sold: {p.sold}
                     </div>

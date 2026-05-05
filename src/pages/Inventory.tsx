@@ -17,6 +17,7 @@ import {
   createProduct,
   updateProduct,
   updateProductStock,
+  debugProductStock,
   deleteProduct,
 } from "@/services/product-db.service";
 
@@ -197,6 +198,18 @@ export default function Inventory() {
 
   useEffect(() => {
     loadProducts().catch(console.error);
+
+    const reloadInventory = () => {
+      loadProducts().catch(console.error);
+    };
+
+    window.addEventListener("focus", reloadInventory);
+    window.addEventListener("visibilitychange", reloadInventory);
+
+    return () => {
+      window.removeEventListener("focus", reloadInventory);
+      window.removeEventListener("visibilitychange", reloadInventory);
+    };
   }, []);
 
   return (

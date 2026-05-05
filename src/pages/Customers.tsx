@@ -4,247 +4,240 @@ import { StatCard } from "@/components/StatCard";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, Heart, Sparkles, Plus, MessageCircle, Pencil, Trash2 } from "lucide-react";
-import { CUSTOMERS, fmtINR, type Customer } from "@/lib/mockData";
-import { useLocalStore, newId } from "@/hooks/useLocalStore";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Users, Heart, Sparkles, MessageCircle } from "lucide-react";
+import { fmtINR } from "@/lib/mockData";
 import { toast } from "sonner";
 import {
   getAllCustomers,
   getCustomerInvoices as getCustomerInvoicesFromDb,
   getCustomerLedger as getCustomerLedgerFromDb,
   collectCustomerPayment,
+  createCustomer,
+  type CustomerRow,
   type CustomerInvoiceRow,
   type CustomerLedgerRow,
 } from "@/services/customer-db.service";
 
-const tierColor: Record<string, string> = {
-  Platinum: "bg-gradient-warm text-primary-foreground",
-  Gold: "bg-accent text-accent-foreground",
-  Silver: "bg-secondary text-secondary-foreground",
-  Bronze: "bg-muted text-muted-foreground",
-};
-
-type Loyalty = Customer["loyalty"];
-interface Form { name: string; visits: string; spent: string; loyalty: Loyalty; }
-const empty: Form = { name: "", visits: "0", spent: "0", loyalty: "Bronze" };
-
-type CustomerEx = Customer & {
-  phone?: string;
-  outstanding?: number;
-};
-
 export default function Customers() {
-  const journalStore = useLocalStore<any>("erp.journal", []);
-  const invoicesStore = useLocalStore<any>("erp.invoices", []);
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<CustomerEx | null>(null);
-  const [ledgerCustomer, setLedgerCustomer] = useState<any | null>(null);
-  const [profileCustomer, setProfileCustomer] = useState<CustomerEx | null>(null);
-  const [form, setForm] = useState<Form>(empty);
-  const [confirmDel, setConfirmDel] = useState<CustomerEx | null>(null);
+  const [ledgerCustomer, setLedgerCustomer] = useState<CustomerRow | null>(null);
+  const [profileCustomer, setProfileCustomer] = useState<CustomerRow | null>(null);
   const [query, setQuery] = useState("");
-  const [items, setItems] = useState<CustomerEx[]>([]);
+  const [items, setItems] = useState<CustomerRow[]>([]);
   const [profileInvoices, setProfileInvoices] = useState<CustomerInvoiceRow[]>([]);
   const [ledgerRows, setLedgerRows] = useState<CustomerLedgerRow[]>([]);
-
-  const openAdd = () => { setEditing(null); setForm(empty); setOpen(true); };
-  const openEdit = (c: CustomerEx) => { setEditing(c); setForm({ name: c.name, visits: String(c.visits), spent: String(c.spent), loyalty: c.loyalty }); setOpen(true); };
-
-  const submit = () => {
-    if (!form.name.trim()) { toast.error("Name is required"); return; }
-    const visits = Number(form.visits) || 0;
-    const spent = Number(form.spent) || 0;
-    if (editing) {
-      update(editing.id, { name: form.name, visits, spent, loyalty: form.loyalty });
-      toast.success("Customer updated");
-    } else {
-      add({ id: newId("C"), name: form.name, visits, spent, loyalty: form.loyalty, last: "Today" });
-      toast.success("Customer added");
-    }
-    setOpen(false);
-  };
-
-  const confirmDelete = () => {
-    if (!confirmDel) return;
-
-    if ((confirmDel.outstanding || 0) > 0) {
-      toast.error("Cannot delete customer with outstanding dues");
-      return;
-    }
-
-    remove(confirmDel.id);
-    toast.success(`${confirmDel.name} removed`);
-    setConfirmDel(null);
-  };
-
-  const totalSpent = items.reduce((s, c) => s + c.spent, 0);
-  const avgLtv = items.length ? Math.round(totalSpent / items.length) : 0;
-
-  const filtered = items.filter((c) =>
-    c.name.toLowerCase().includes(query.toLowerCase())
-  );
-
-  const getLedger = (customerName: string) => {
-    const entries: any[] = [];
-
-    // 1. invoices
-    invoicesStore.items.forEach((inv: any) => {
-      if (inv.customer === customerName && inv.status !== "Voided") {
-        entries.push({
-          date: inv.time,
-          type: "Invoice",
-          ref: inv.id,
-          debit: inv.amount,
-          credit: 0,
-        });
-      }
-    });
-
-    // 2. payments
-    invoicesStore.items.forEach((inv: any) => {
-      if (inv.customer === customerName && inv.payments) {
-        inv.payments.forEach((p: any) => {
-          entries.push({
-            date: p.date,
-            type: "Payment",
-            ref: inv.id,
-            debit: 0,
-            credit: p.amount,
-          });
-        });
-      }
-    });
-
-    // 3. returns
-    invoicesStore.items.forEach((inv: any) => {
-      if (inv.customer === customerName && inv.status === "Returned") {
-        entries.push({
-          date: inv.time,
-          type: "Return",
-          ref: inv.id,
-          debit: 0,
-          credit: inv.amount,
-        });
-      }
-    });
-
-    // sort by date
-    entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-    // running balance
-    let balance = 0;
-
-    return entries.map((e) => {
-      balance += e.debit - e.credit;
-      return {
-        ...e,
-        balance,
-      };
-    });
-  };
-
-  const getCustomerInvoices = (customerName: string) => {
-  return [...invoicesStore.items]
-    .filter((inv: any) => inv.customer === customerName)
-    .sort(
-      (a: any, b: any) =>
-        new Date(String(b.time)).getTime() - new Date(String(a.time)).getTime()
-    );
-};
-
-  const collectFromCustomer = async (customer: CustomerEx) => {
-    const raw = window.prompt(
-      `Collect amount from ${customer.name} (max ₹${customer.outstanding || 0})`,
-      String(customer.outstanding || 0)
-    );
-
-    if (!raw) return;
-
-    const amt = Number(raw) || 0;
-
-    if (amt <= 0) {
-      toast.error("Enter valid amount");
-      return;
-    }
-
-    try {
-      const applied = await collectCustomerPayment(customer.name, amt);
-
-      if (applied <= 0) {
-        toast.error("No outstanding dues found");
-        return;
-      }
-
-      toast.success(`Collected ${fmtINR(applied)} from ${customer.name}`);
-
-      await loadCustomers();
-
-      if (profileCustomer?.name === customer.name) {
-        const updatedCustomers = await getAllCustomers();
-        const updatedCustomer = updatedCustomers.find((c) => c.name === customer.name);
-
-        if (updatedCustomer) {
-          setProfileCustomer(updatedCustomer as CustomerEx);
-        }
-
-        const invoices = await getSqlCustomerInvoices(customer.name);
-        setProfileInvoices(invoices);
-
-        const ledger = await getSqlCustomerLedger(customer.name);
-        setLedgerRows(ledger);
-      }
-    } catch (error) {
-      console.error(error);
-      toast.error("Failed to collect payment");
-    }
-  };
+  const [addOpen, setAddOpen] = useState(false);
+  const [newCustomer, setNewCustomer] = useState({
+    name: "",
+    phone: "",
+    openingBalance: "",
+  });
+  const [collectOpen, setCollectOpen] = useState(false);
+  const [collectCustomer, setCollectCustomer] = useState<CustomerRow | null>(null);
+  const [collectAmount, setCollectAmount] = useState("");
 
   async function loadCustomers() {
     const rows = await getAllCustomers();
-    setItems(rows as CustomerEx[]);
+    setItems(rows);
   }
 
   useEffect(() => {
     loadCustomers().catch(console.error);
   }, []);
 
+  const totalSpent = items.reduce((s, c) => s + Number(c.spent || 0), 0);
+  const avgLtv = items.length ? Math.round(totalSpent / items.length) : 0;
+
+  const filtered = items.filter((c) => {
+    const q = query.toLowerCase();
+    return (
+      c.name.toLowerCase().includes(q) ||
+      String(c.phone || "").toLowerCase().includes(q)
+    );
+  });
+
+  const collectFromCustomer = (customer: CustomerRow) => {
+    setCollectCustomer(customer);
+    setCollectAmount(String(customer.outstanding || 0));
+    setCollectOpen(true);
+  };
+
+  const openProfile = async (customer: CustomerRow) => {
+    setProfileCustomer(customer);
+    const rows = await getCustomerInvoicesFromDb(Number(customer.id));
+    setProfileInvoices(rows);
+  };
+
+  const openLedger = async (customer: CustomerRow) => {
+    setLedgerCustomer(customer);
+    const rows = await getCustomerLedgerFromDb(Number(customer.id));
+    setLedgerRows(rows);
+  };
+
+  const saveNewCustomer = async () => {
+    const name = newCustomer.name.trim();
+    const phone = newCustomer.phone.trim();
+    const openingBalance = Number(newCustomer.openingBalance || 0);
+
+    if (!name) {
+      toast.error("Customer name required");
+      return;
+    }
+
+    try {
+      await createCustomer({
+        name,
+        phone,
+        openingBalance,
+      });
+
+      await loadCustomers();
+
+      setNewCustomer({
+        name: "",
+        phone: "",
+        openingBalance: "",
+      });
+
+      setAddOpen(false);
+      toast.success("Customer added");
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error?.message || "Failed to add customer");
+    }
+  };
+
+  const submitCollectPayment = async () => {
+    if (!collectCustomer) return;
+
+    const amt = Number(collectAmount) || 0;
+
+    if (amt <= 0) {
+      toast.error("Enter valid amount");
+      return;
+    }
+
+    if (amt > Number(collectCustomer.outstanding || 0)) {
+      toast.error("Amount cannot exceed outstanding");
+      return;
+    }
+
+    try {
+      const applied = await collectCustomerPayment(Number(collectCustomer.id), amt);
+
+      if (applied <= 0) {
+        toast.error("No outstanding dues found");
+        return;
+      }
+
+      toast.success(`Collected ${fmtINR(applied)} from ${collectCustomer.name}`);
+
+      await loadCustomers();
+
+      const updatedCustomers = await getAllCustomers();
+      const updatedCustomer = updatedCustomers.find(
+        (c) => Number(c.id) === Number(collectCustomer.id)
+      );
+
+      if (updatedCustomer && profileCustomer?.id === collectCustomer.id) {
+        setProfileCustomer(updatedCustomer);
+      }
+
+      if (profileCustomer?.id === collectCustomer.id) {
+        const invoices = await getCustomerInvoicesFromDb(Number(collectCustomer.id));
+        setProfileInvoices(invoices);
+      }
+
+      if (ledgerCustomer?.id === collectCustomer.id) {
+        const ledger = await getCustomerLedgerFromDb(Number(collectCustomer.id));
+        setLedgerRows(ledger);
+      }
+
+      setCollectOpen(false);
+      setCollectCustomer(null);
+      setCollectAmount("");
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to collect payment");
+    }
+  };
+
   return (
     <>
       <PageHeader
         eyebrow="CRM & loyalty"
         title="Customer 360"
-        subtitle="Every customer's purchase history, loyalty tier, and lifetime value."
+        subtitle="Every customer's purchase history, outstanding balance, and ledger."
         actions={
           <>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => toast.success("Campaign drafted")}><MessageCircle className="h-4 w-4" /> Campaign</Button>
-            <Button size="sm" className="bg-gradient-primary shadow-glow gap-1.5" onClick={openAdd}><Plus className="h-4 w-4" /> New customer</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => toast.success("Campaign drafted")}
+            >
+              <MessageCircle className="h-4 w-4" /> Campaign
+            </Button>
+             <Button
+              size="sm"
+              className="bg-gradient-primary shadow-glow gap-1.5"
+              onClick={() => setAddOpen(true)}
+            >
+              Add customer
+            </Button>
           </>
         }
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Total customers" value={String(items.length)} icon={Users} delta={+8} hint="this month" accent="primary" />
-        <StatCard label="Loyalty members" value={String(items.filter(c => c.loyalty !== "Bronze").length)} icon={Heart} delta={+14} hint="penetration" accent="accent" />
+        <StatCard
+          label="Total customers"
+          value={String(items.length)}
+          icon={Users}
+          delta={0}
+          hint="from sales"
+          accent="primary"
+        />
+
+        <StatCard
+          label="Loyalty members"
+          value={String(items.filter((c) => c.loyalty !== "Bronze").length)}
+          icon={Heart}
+          delta={0}
+          hint="silver+"
+          accent="accent"
+        />
+
         <StatCard
           label="Outstanding"
-          value={fmtINR(items.reduce((s, c) => s + (c.outstanding || 0), 0))}
+          value={fmtINR(items.reduce((s, c) => s + Number(c.outstanding || 0), 0))}
           icon={Sparkles}
-          delta={+4}
+          delta={0}
           hint="customer dues"
           accent="success"
         />
-        <StatCard label="Avg LTV" value={fmtINR(avgLtv)} icon={Users} delta={+11} hint="per customer" accent="warning" />
+
+        <StatCard
+          label="Avg LTV"
+          value={fmtINR(avgLtv)}
+          icon={Users}
+          delta={0}
+          hint="per customer"
+          accent="warning"
+        />
       </div>
 
       <Card className="p-4 mb-4">
         <Input
-          placeholder="Search customer name..."
+          placeholder="Search customer name or phone..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -271,124 +264,78 @@ export default function Customers() {
             </thead>
 
             <tbody>
-              {filtered.map((c) => (
-                <tr key={c.id} className="border-t hover:bg-secondary/30">
-                  <td className="px-4 py-3">
-                    <div className="font-semibold">{c.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {c.id} · {c.last}
-                    </div>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="px-4 py-10 text-center text-sm text-muted-foreground"
+                  >
+                    No customers found. Customers are created from POS sales.
                   </td>
+                </tr>
+              ) : (
+                filtered.map((c) => (
+                  <tr key={c.id} className="border-t hover:bg-secondary/30">
+                    <td className="px-4 py-3">
+                      <div className="font-semibold">{c.name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        CUST-{c.id} {c.phone ? `· ${c.phone}` : ""} · {c.last}
+                      </div>
+                    </td>
 
-                  <td className="px-4 py-3 text-right font-mono-num">
-                    {fmtINR(c.spent)}
-                  </td>
+                    <td className="px-4 py-3 text-right font-mono-num">
+                      {fmtINR(c.spent)}
+                    </td>
 
-                  <td className="px-4 py-3 text-right font-mono-num">
-                    {c.visits}
-                  </td>
+                    <td className="px-4 py-3 text-right font-mono-num">
+                      {c.visits}
+                    </td>
 
-                  <td className={`px-4 py-3 text-right font-mono-num ${
-                    (c.outstanding || 0) > 0 ? "text-destructive" : ""
-                  }`}>
-                    {fmtINR(c.outstanding || 0)}
-                  </td>
-
-                  <td className="px-4 py-3 text-right space-x-2">
-                    <Button size="sm" variant="outline" onClick={async () => {
-                      setLedgerCustomer(c);
-                      const rows = await getCustomerLedgerFromDb(c.name);
-                      setLedgerRows(rows);
-                    }}>
-                      Ledger
-                    </Button>
-
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-xs"
-                      onClick={async () => {
-                        setProfileCustomer(c);
-                         const rows = await getCustomerInvoicesFromDb(c.name);
-                        setProfileInvoices(rows);
-                      }}
+                    <td
+                      className={`px-4 py-3 text-right font-mono-num ${
+                        (c.outstanding || 0) > 0 ? "text-destructive" : ""
+                      }`}
                     >
-                      Profile
-                    </Button>
+                      {fmtINR(c.outstanding || 0)}
+                    </td>
 
-                    <Button size="sm" variant="outline" onClick={() => openEdit(c)}>
-                      Edit
-                    </Button>
+                    <td className="px-4 py-3 text-right space-x-2">
+                      <Button size="sm" variant="outline" onClick={() => openLedger(c)}>
+                        Ledger
+                      </Button>
 
-                    {(c.outstanding || 0) > 0 && (
                       <Button
                         size="sm"
                         variant="outline"
                         className="text-xs"
-                        onClick={() => collectFromCustomer(c)}
+                        onClick={() => openProfile(c)}
                       >
-                        Collect total
+                        Profile
                       </Button>
-                    )}
 
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="text-destructive"
-                      onClick={() => setConfirmDel(c)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </td>
-                </tr>
-              ))}
+                      {(c.outstanding || 0) > 0 && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-xs"
+                          onClick={() => collectFromCustomer(c)}
+                        >
+                          Collect total
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
       </Card>
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{editing ? "Edit customer" : "New customer"}</DialogTitle>
-            <DialogDescription>{editing ? "Update customer profile." : "Add a customer to your CRM."}</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-3 py-2">
-            <div className="grid gap-1.5">
-              <Label>Full name</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Rohit Sharma" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-1.5">
-                <Label>Visits</Label>
-                <Input type="number" value={form.visits} onChange={(e) => setForm({ ...form, visits: e.target.value })} />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Lifetime spent (₹)</Label>
-                <Input type="number" value={form.spent} onChange={(e) => setForm({ ...form, spent: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid gap-1.5">
-              <Label>Loyalty tier</Label>
-              <Select value={form.loyalty} onValueChange={(v) => setForm({ ...form, loyalty: v as Loyalty })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Bronze">Bronze</SelectItem>
-                  <SelectItem value="Silver">Silver</SelectItem>
-                  <SelectItem value="Gold">Gold</SelectItem>
-                  <SelectItem value="Platinum">Platinum</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button className="bg-gradient-primary" onClick={submit}>{editing ? "Save changes" : "Add customer"}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!profileCustomer} onOpenChange={(o) => !o && setProfileCustomer(null)}>
+      <Dialog
+        open={!!profileCustomer}
+        onOpenChange={(o) => !o && setProfileCustomer(null)}
+      >
         <DialogContent className="max-w-5xl">
           <DialogHeader>
             <DialogTitle>{profileCustomer?.name} · Customer profile</DialogTitle>
@@ -404,7 +351,9 @@ export default function Customers() {
                   <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
                     Loyalty
                   </div>
-                  <div className="font-semibold text-sm">{profileCustomer.loyalty}</div>
+                  <div className="font-semibold text-sm">
+                    {profileCustomer.loyalty}
+                  </div>
                 </Card>
 
                 <Card className="p-4 border border-border/60 shadow-none">
@@ -429,7 +378,13 @@ export default function Customers() {
                   <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
                     Outstanding
                   </div>
-                  <div className={`font-mono-num font-bold text-sm ${(profileCustomer.outstanding || 0) > 0 ? "text-destructive" : ""}`}>
+                  <div
+                    className={`font-mono-num font-bold text-sm ${
+                      (profileCustomer.outstanding || 0) > 0
+                        ? "text-destructive"
+                        : ""
+                    }`}
+                  >
                     {fmtINR(profileCustomer.outstanding || 0)}
                   </div>
                 </Card>
@@ -445,22 +400,8 @@ export default function Customers() {
                   </Button>
                 )}
 
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    setLedgerCustomer(profileCustomer);
-                    const rows = await getCustomerLedgerFromDb(profileCustomer.name);
-                    setLedgerRows(rows);
-                  }}
-                >
+                <Button variant="outline" onClick={() => openLedger(profileCustomer)}>
                   Open ledger
-                </Button>
-
-                <Button
-                  variant="outline"
-                  onClick={() => openEdit(profileCustomer)}
-                >
-                  Edit customer
                 </Button>
               </div>
 
@@ -480,21 +421,30 @@ export default function Customers() {
                         <th className="text-left px-4 py-3">Status</th>
                       </tr>
                     </thead>
+
                     <tbody>
                       {profileInvoices.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                          <td
+                            colSpan={5}
+                            className="px-4 py-10 text-center text-sm text-muted-foreground"
+                          >
                             No invoices found for this customer.
                           </td>
                         </tr>
                       ) : (
-                        profileInvoices.map((inv: any) => (
-                          <tr key={inv.id} className="border-t border-border hover:bg-secondary/30">
+                        profileInvoices.map((inv) => (
+                          <tr
+                            key={inv.id}
+                            className="border-t border-border hover:bg-secondary/30"
+                          >
                             <td className="px-4 py-3 font-mono-num text-primary font-semibold">
                               {inv.id}
                             </td>
                             <td className="px-4 py-3 text-xs text-muted-foreground">
-                              {inv.time ? new Date(String(inv.time)).toLocaleString() : "—"}
+                              {inv.time
+                                ? new Date(String(inv.time)).toLocaleString()
+                                : "—"}
                             </td>
                             <td className="px-4 py-3 text-right font-mono-num">
                               {fmtINR(inv.amount || 0)}
@@ -510,7 +460,8 @@ export default function Customers() {
                                     ? "bg-success/10 text-success border-success/30"
                                     : inv.status === "Credit"
                                     ? "bg-accent/10 text-accent-foreground border-accent/30"
-                                    : inv.status === "Returned" || inv.status === "Voided"
+                                    : inv.status === "Returned" ||
+                                      inv.status === "Voided"
                                     ? "bg-muted text-muted-foreground border-border"
                                     : "bg-warning/10 text-warning border-warning/30"
                                 }
@@ -536,12 +487,13 @@ export default function Customers() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!ledgerCustomer} onOpenChange={(o) => !o && setLedgerCustomer(null)}>
+      <Dialog
+        open={!!ledgerCustomer}
+        onOpenChange={(o) => !o && setLedgerCustomer(null)}
+      >
         <DialogContent className="max-w-4xl">
           <DialogHeader>
-            <DialogTitle>
-              {ledgerCustomer?.name} · Ledger
-            </DialogTitle>
+            <DialogTitle>{ledgerCustomer?.name} · Ledger</DialogTitle>
             <DialogDescription>
               Complete transaction history and balance
             </DialogDescription>
@@ -561,11 +513,20 @@ export default function Customers() {
               </thead>
 
               <tbody>
-                {ledgerCustomer &&
+                {ledgerRows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      className="px-4 py-10 text-center text-sm text-muted-foreground"
+                    >
+                      No ledger entries found.
+                    </td>
+                  </tr>
+                ) : (
                   ledgerRows.map((e, i) => (
                     <tr key={i} className="border-t border-border">
                       <td className="px-4 py-3 text-xs text-muted-foreground">
-                        {new Date(e.date).toLocaleDateString()}
+                        {e.date ? new Date(e.date).toLocaleDateString() : "—"}
                       </td>
                       <td className="px-4 py-3">{e.type}</td>
                       <td className="px-4 py-3 font-mono-num text-xs">{e.ref}</td>
@@ -579,7 +540,8 @@ export default function Customers() {
                         {fmtINR(e.balance)}
                       </td>
                     </tr>
-                  ))}
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -591,19 +553,110 @@ export default function Customers() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-md">
+      <DialogHeader>
+        <DialogTitle>Add customer</DialogTitle>
+        <DialogDescription>
+          Create a customer account before billing or udhaar.
+        </DialogDescription>
+      </DialogHeader>
 
-      <AlertDialog open={!!confirmDel} onOpenChange={(o) => !o && setConfirmDel(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove {confirmDel?.name}?</AlertDialogTitle>
-            <AlertDialogDescription>The customer profile will be deleted from your CRM.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <div className="grid gap-3 py-2">
+        <div className="grid gap-1.5">
+          <label className="text-xs font-medium text-muted-foreground">
+            Customer name
+          </label>
+          <Input
+            value={newCustomer.name}
+            onChange={(e) =>
+              setNewCustomer({ ...newCustomer, name: e.target.value })
+            }
+            placeholder="e.g. Rohit Sharma"
+          />
+        </div>
+
+        <div className="grid gap-1.5">
+          <label className="text-xs font-medium text-muted-foreground">
+            Phone number
+          </label>
+          <Input
+            value={newCustomer.phone}
+            onChange={(e) =>
+              setNewCustomer({ ...newCustomer, phone: e.target.value })
+            }
+            placeholder="Optional"
+          />
+        </div>
+
+        <div className="grid gap-1.5">
+          <label className="text-xs font-medium text-muted-foreground">
+            Opening balance
+          </label>
+          <Input
+            type="number"
+            value={newCustomer.openingBalance}
+            onChange={(e) =>
+              setNewCustomer({
+                ...newCustomer,
+                openingBalance: e.target.value,
+              })
+            }
+            placeholder="Old udhaar amount, if any"
+          />
+        </div>
+      </div>
+
+      <DialogFooter>
+        <Button variant="outline" onClick={() => setAddOpen(false)}>
+          Cancel
+        </Button>
+        <Button onClick={saveNewCustomer}>Save customer</Button>
+      </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={collectOpen} onOpenChange={setCollectOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Collect payment</DialogTitle>
+            <DialogDescription>
+              Record payment against outstanding dues.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2">
+            <div className="rounded-lg border border-border bg-secondary/30 p-3 text-sm">
+              <div className="font-semibold">{collectCustomer?.name}</div>
+              <div className="text-xs text-muted-foreground">
+                Outstanding: {fmtINR(collectCustomer?.outstanding || 0)}
+              </div>
+            </div>
+
+            <div className="grid gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground">
+                Amount received
+              </label>
+              <Input
+                autoFocus
+                type="number"
+                value={collectAmount}
+                onChange={(e) => setCollectAmount(e.target.value)}
+                placeholder="Enter amount"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCollectOpen(false)}>
+              Cancel
+            </Button>
+
+            <Button onClick={submitCollectPayment}>
+              Collect payment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
