@@ -8,14 +8,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Receipt, RotateCcw, Banknote, ShoppingCart, Download, Plus, Pencil, Trash2 } from "lucide-react";
-import { RECENT_INVOICES, fmtINR, type Invoice } from "@/lib/mockData";
-import { useLocalStore, newId } from "@/hooks/useLocalStore";
+import { fmtINR } from "@/lib/format";
 import { toast } from "sonner";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
-import { addStockLedgerEntry, createStockLedgerEntry } from "@/lib/stockLedger";
 import { getAllSales, getSaleItems, collectSalePayment, returnSale, voidSale } from "@/services/sales-db.service";
+import { addJournalEntry } from "@/services/accounting-db.service";
+import { addPayment, getPaymentsBySource, type PaymentRow } from "@/services/payment-db.service";
 
 const data = [
   { day: "Mon", pos: 92000, b2b: 50000, online: 28000 },
@@ -27,45 +26,50 @@ const data = [
   { day: "Sun", pos: 138000, b2b: 52000, online: 42000 },
 ];
 
-  type InvoicePayment = {
-    id: string;
-    date: string;
-    amount: number;
-    mode: string;
-  };
+type InvoiceStatus = "Paid" | "Credit" | "Pending" | "Voided" | "Returned";
 
-  type InvoiceEx = Invoice & {
-    paidAmount?: number;
-    dueAmount?: number;
-    payments?: InvoicePayment[];
-    total?: number;
-    subtotal?: number;
-    discount?: number;
-    discountValue?: number;
-    discountType?: "percent" | "flat";
-    tax?: number;
-    gstRate?: number;
-    gstMode?: "with" | "without";
-    voidedAt?: string;
-    voidReason?: string;
-    items?: Array<{
-      sku: string;
-      name: string;
-      qty: number;
-      price: number;
-    }>;
-  };
+type InvoicePayment = {
+  id: string;
+  date: string;
+  amount: number;
+  mode: string;
+};
 
-type Status = Invoice["status"];
+type InvoiceEx = {
+  id: string;
+  customer: string;
+  channel: string;
+  amount: number;
+  status: InvoiceStatus;
+  time: string;
+  paidAmount?: number;
+  dueAmount?: number;
+  payments?: InvoicePayment[];
+  total?: number;
+  subtotal?: number;
+  discount?: number;
+  discountValue?: number;
+  discountType?: "percent" | "flat";
+  tax?: number;
+  gstRate?: number;
+  gstMode?: "with" | "without";
+  voidedAt?: string;
+  voidReason?: string;
+  items?: Array<{
+    sku: string;
+    name: string;
+    qty: number;
+    price: number;
+  }>;
+};
+
+type Status = InvoiceStatus;
 interface Form { customer: string; channel: string; amount: string; status: Status; }
 const empty: Form = { customer: "", channel: "POS", amount: "", status: "Paid" };
 
 export default function Sales() {
-  const customersStore = useLocalStore<any>("erp.customers", []);
-  const journalStore = useLocalStore<any>("erp.journal", []);
-  const productsStore = useLocalStore<any>("erp.products", []);
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<Invoice | null>(null);
+  const [editing, setEditing] = useState<InvoiceEx | null>(null);
   const [form, setForm] = useState<Form>(empty);
   const [collecting, setCollecting] = useState<InvoiceEx | null>(null);
   const [collectAmount, setCollectAmount] = useState("");
@@ -76,18 +80,15 @@ export default function Sales() {
   const [returning, setReturning] = useState<InvoiceEx | null>(null);
   const [returnReason, setReturnReason] = useState("");
   const [items, setItems] = useState<any[]>([]);
+  const [viewingPayments, setViewingPayments] = useState<PaymentRow[]>([]);
 
-  const openAdd = () => { setEditing(null); setForm(empty); setOpen(true); };
-  const openEdit = (i: Invoice) => { setEditing(i); setForm({ customer: i.customer, channel: i.channel, amount: String(i.amount), status: i.status }); setOpen(true); };
 
   const submit = () => {
     if (!form.customer.trim()) { toast.error("Customer required"); return; }
     const amount = Number(form.amount) || 0;
     if (editing) {
-      update(editing.id, { customer: form.customer, channel: form.channel, amount, status: form.status });
       toast.success("Invoice updated");
     } else {
-      add({ id: newId("INV"), customer: form.customer, channel: form.channel, amount, status: form.status, time: "Just now" });
       toast.success("Invoice created");
     }
     setOpen(false);
@@ -102,7 +103,20 @@ export default function Sales() {
     }
 
     try {
+      const paidAmount = Number(voiding.paidAmount || 0);
+
       await voidSale(voiding.id, voidReason.trim());
+
+      if (paidAmount > 0) {
+        await addJournalEntry({
+          desc: `Void invoice ${voiding.id} · ${voidReason.trim()}`,
+          debit: paidAmount,
+          credit: 0,
+          sourceType: "VOID",
+          sourceId: voiding.id,
+          isSystem: true,
+        });
+      }
 
       toast.success(`Invoice ${voiding.id} voided`);
 
@@ -143,8 +157,28 @@ export default function Sales() {
         return;
       }
 
-      toast.success(`Collected ${fmtINR(applied)} for ${collecting.id}`);
+      await addPayment({
+        partyType: "CUSTOMER",
+        partyId: collecting.customerId ?? null,
+        partyName: collecting.customer,
+        sourceType: "INVOICE_PAYMENT",
+        sourceId: collecting.id,
+        amount: applied,
+        mode: collectMode,
+        direction: "IN",
+        note: `Payment collected for invoice ${collecting.id}`,
+      });
 
+      await addJournalEntry({
+        desc: `Invoice payment ${collecting.id} · ${collecting.customer}`,
+        debit: 0,
+        credit: applied,
+        sourceType: "INVOICE_PAYMENT",
+        sourceId: collecting.id,
+        isSystem: true,
+      });
+
+      toast.success(`Collected ${fmtINR(applied)} for ${collecting.id}`);
       await loadSales();
 
       if (viewing?.id === collecting.id) {
@@ -177,7 +211,20 @@ export default function Sales() {
     }
 
     try {
+      const paidAmount = Number(returning.paidAmount || 0);
+
       await returnSale(returning.id, returnReason.trim());
+
+      if (paidAmount > 0) {
+        await addJournalEntry({
+          desc: `Return invoice ${returning.id} · ${returnReason.trim()}`,
+          debit: paidAmount,
+          credit: 0,
+          sourceType: "RETURN",
+          sourceId: returning.id,
+          isSystem: true,
+        });
+      }
 
       toast.success(`Invoice ${returning.id} returned`);
 
@@ -325,6 +372,10 @@ export default function Sales() {
                         className="h-8 text-xs"
                         onClick={async () => {
                           const saleItems = await getSaleItems(inv.id);
+                          const paymentRows = await getPaymentsBySource("INVOICE_PAYMENT", inv.id);
+
+                          setViewingPayments(paymentRows);
+
                           setViewing({
                             ...inv,
                             items: saleItems,
@@ -635,9 +686,9 @@ export default function Sales() {
                     Payment history
                   </div>
 
-                  {viewing.payments && viewing.payments.length > 0 ? (
+                  {viewingPayments.length > 0 ? (
                     <div className="space-y-2">
-                      {viewing.payments.map((p) => (
+                      {viewingPayments.map((p) => (
                         <div
                           key={p.id}
                           className="flex items-center justify-between rounded-lg border border-border px-3 py-2"

@@ -78,25 +78,10 @@ export async function findOrCreateCustomer(input: {
 }
 
 export async function refreshCustomerBalance(customerId: number) {
-  const db = await getDb()
-
-  const rows = await db.select<any[]>(
-    `
-    SELECT COALESCE(SUM(due_amount), 0) as balance
-    FROM sales
-    WHERE customer_id = ?
-    `,
-    [customerId]
-  )
-
-  await db.execute(
-    `
-    UPDATE customers
-    SET balance = ?
-    WHERE id = ?
-    `,
-    [Number(rows[0]?.balance || 0), customerId]
-  )
+  // customers.balance is treated as opening/legacy balance only.
+  // Invoice dues are calculated from sales.due_amount.
+  // So this function intentionally does not overwrite customers.balance.
+  return customerId
 }
 
 export async function getAllCustomers(): Promise<CustomerRow[]> {
@@ -109,8 +94,19 @@ export async function getAllCustomers(): Promise<CustomerRow[]> {
       c.name,
       c.phone,
       COUNT(s.id) as visits,
-      COALESCE(SUM(s.total), 0) as spent,
-      COALESCE(c.balance, 0) + COALESCE(SUM(s.due_amount), 0) as outstanding,
+      COALESCE(SUM(
+        CASE 
+          WHEN s.status NOT IN ('Voided', 'Returned') THEN s.total 
+          ELSE 0 
+        END
+      ), 0) as spent,
+      COALESCE(c.balance, 0) as openingBalance,
+      COALESCE(SUM(
+        CASE 
+          WHEN s.status NOT IN ('Voided', 'Returned') THEN s.due_amount 
+          ELSE 0 
+        END
+      ), 0) as invoiceDue,
       MAX(s.created_at) as lastAt
     FROM customers c
     LEFT JOIN sales s ON s.customer_id = c.id
@@ -119,16 +115,22 @@ export async function getAllCustomers(): Promise<CustomerRow[]> {
     `
   )
 
-  return rows.map((r) => ({
-    id: Number(r.id),
-    name: r.name,
-    phone: r.phone || '',
-    spent: Number(r.spent || 0),
-    visits: Number(r.visits || 0),
-    outstanding: Number(r.outstanding || 0),
-    loyalty: getTier(Number(r.spent || 0)),
-    last: r.lastAt ? 'Recent' : 'No sales yet',
-  }))
+  return rows.map((r) => {
+    const spent = Number(r.spent || 0)
+    const openingBalance = Number(r.openingBalance || 0)
+    const invoiceDue = Number(r.invoiceDue || 0)
+
+    return {
+      id: Number(r.id),
+      name: r.name,
+      phone: r.phone || '',
+      spent,
+      visits: Number(r.visits || 0),
+      outstanding: openingBalance + invoiceDue,
+      loyalty: getTier(spent),
+      last: r.lastAt ? 'Recent' : 'No sales yet',
+    }
+  })
 }
 
 export type CustomerInvoiceRow = {
@@ -177,7 +179,17 @@ export async function getCustomerLedger(
 ): Promise<CustomerLedgerRow[]> {
   const db = await getDb()
 
-  const rows = await db.select<any[]>(
+  const customerRows = await db.select<any[]>(
+    `
+    SELECT balance
+    FROM customers
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [customerId]
+  )
+
+  const salesRows = await db.select<any[]>(
     `
     SELECT
       id,
@@ -188,28 +200,47 @@ export async function getCustomerLedger(
       datetime(created_at, 'unixepoch', 'localtime') as time
     FROM sales
     WHERE customer_id = ?
+      AND status NOT IN ('Voided', 'Returned')
     ORDER BY created_at ASC
     `,
     [customerId]
   )
 
   let balance = 0
+  const ledger: CustomerLedgerRow[] = []
 
-  return rows.map((r) => {
+  const openingBalance = Number(customerRows[0]?.balance || 0)
+
+  if (openingBalance > 0) {
+    balance += openingBalance
+
+    ledger.push({
+      date: '',
+      type: 'Opening Balance',
+      ref: 'OPENING',
+      debit: openingBalance,
+      credit: 0,
+      balance,
+    })
+  }
+
+  for (const r of salesRows) {
     const debit = Number(r.total || 0)
     const credit = Number(r.paid_amount || 0)
 
     balance += debit - credit
 
-    return {
+    ledger.push({
       date: r.time,
       type: 'Invoice',
       ref: r.id,
       debit,
       credit,
       balance,
-    }
-  })
+    })
+  }
+
+  return ledger
 }
 
 export async function collectCustomerPayment(
@@ -217,6 +248,10 @@ export async function collectCustomerPayment(
   amount: number
 ) {
   const db = await getDb()
+
+  if (amount <= 0) {
+    throw new Error('Invalid payment amount')
+  }
 
   const creditSales = await db.select<any[]>(
     `
@@ -231,15 +266,18 @@ export async function collectCustomerPayment(
   )
 
   let remaining = amount
+  let applied = 0
 
+  // First apply payment to oldest invoice dues
   for (const sale of creditSales) {
     if (remaining <= 0) break
 
     const due = Number(sale.due_amount || 0)
     const paid = Number(sale.paid_amount || 0)
-    const applied = Math.min(remaining, due)
-    const nextDue = due - applied
-    const nextPaid = paid + applied
+    const applyNow = Math.min(remaining, due)
+
+    const nextDue = Math.max(due - applyNow, 0)
+    const nextPaid = paid + applyNow
 
     await db.execute(
       `
@@ -253,12 +291,45 @@ export async function collectCustomerPayment(
       [nextDue, nextPaid, nextDue <= 0 ? 'Paid' : 'Credit', sale.id]
     )
 
-    remaining -= applied
+    remaining -= applyNow
+    applied += applyNow
   }
 
-  await refreshCustomerBalance(customerId)
+  // Then apply any remaining amount to opening/legacy balance
+  if (remaining > 0) {
+    const customerRows = await db.select<any[]>(
+      `
+      SELECT balance
+      FROM customers
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [customerId]
+    )
 
-  return amount - remaining
+    const currentOpeningBalance = Number(customerRows[0]?.balance || 0)
+    const applyToOpening = Math.min(remaining, currentOpeningBalance)
+    const nextOpeningBalance = Math.max(
+      currentOpeningBalance - applyToOpening,
+      0
+    )
+
+    if (applyToOpening > 0) {
+      await db.execute(
+        `
+        UPDATE customers
+        SET balance = ?
+        WHERE id = ?
+        `,
+        [nextOpeningBalance, customerId]
+      )
+
+      remaining -= applyToOpening
+      applied += applyToOpening
+    }
+  }
+
+  return applied
 }
 
 export async function createCustomer(input: {

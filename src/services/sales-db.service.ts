@@ -5,10 +5,18 @@ export type SaleItemRow = {
   name: string
   qty: number
   price: number
+  costPrice?: number
+  profit?: number
+  hsnCode?: string | null
+  gstRate?: number
+  taxAmount?: number
+  taxableAmount?: number
+  taxInclusive?: number
 }
 
 export type SaleRow = {
   id: string
+  customerId?: number | null
   customer: string
   channel: string
   amount: number
@@ -33,6 +41,7 @@ export async function getAllSales(): Promise<SaleRow[]> {
     `
     SELECT
       id,
+      customer_id as customerId,
       customer_name as customer,
       channel,
       total as amount,
@@ -62,7 +71,14 @@ export async function getSaleItems(saleId: string): Promise<SaleItemRow[]> {
       sku,
       name,
       qty,
-      price
+      price,
+      COALESCE(cost_price, 0) as costPrice,
+      COALESCE(profit, 0) as profit,
+      hsn_code as hsnCode,
+      COALESCE(gst_rate, 0) as gstRate,
+      COALESCE(tax_amount, 0) as taxAmount
+      COALESCE(taxable_amount, 0) as taxableAmount,
+      COALESCE(tax_inclusive, 1) as taxInclusive
     FROM sale_items
     WHERE sale_id = ?
     ORDER BY id ASC

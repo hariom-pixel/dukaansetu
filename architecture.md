@@ -104,24 +104,34 @@ Hindi:
 आज की बिक्री बताओ
 राम का कितना उधार है?
 
-Sprint Roadmap
-Sprint 1
+# Sprint 1
+
 Perfect POS UX
 invoice flow
 returns
 speed
-Sprint 2
+
+# Sprint 2
+
 customer dues
 ledger
 payment collection
-Sprint 3
+
+# Sprint 3
+
 reports
 owner dashboard
-Sprint 4
+
+# Sprint 4
+
 auth + multi-user
-Sprint 5
+
+# Sprint 5
+
 WhatsApp reminders
-Sprint 6
+
+# Sprint 6
+
 AI insights
 
 Rule: Every "Save" button in your React UI should resolve instantly after the SQLite write. The user should never wait for the NestJS server to respond before they can move to the next bill. The sync happens in the background.
@@ -136,9 +146,9 @@ b.ts just does Database.load(...). Default journal mode is DELETE, which locks d
 
 GST Report
 
-Architecture
+# Architecture
 
-Phase -1
+# Phase -1
 
 Desktop App: Tauri
 Frontend UI: React + TypeScript + Vite
@@ -147,7 +157,7 @@ Backend API: NestJS
 Cloud DB: PostgreSQL
 Sync Engine: Queue-based sync
 
-Phase -2
+# Phase -2
 
 Desktop App: Tauri 2.x
 Frontend: React + TypeScript + Vite + Tailwind + shadcn/ui
@@ -160,7 +170,7 @@ Sync: PowerSync or ElectricSQL ← critical
 Auth: Better-Auth (TS) or your existing JWT
 PDFs: Browser print (already works)
 
-Phase -3
+# Phase -3
 
 Desktop App: Tauri 2.x
 Frontend: React + TypeScript + Vite + Tailwind + shadcn/ui
@@ -177,3 +187,65 @@ PDF/Print: Browser print first, thermal printer integration later
 Finish offline product first
 But keep all tables sync-ready
 Then add NestJS + PostgreSQL + sync
+
+1. Supplier payable/payment correctness
+
+2. Dedicated payment history table
+
+3. Production invoice sequence
+
+4. Atomic billing save flow
+
+5. Customer/Supplier ledger payment history display
+
+6. Remove remaining mock business data from active business pages
+
+7. Product cost price support
+
+8. Accurate profit/margin calculation
+
+9. HSN/GST rate per product
+
+10. Unit type support: pcs, kg, litre, box, etc.
+
+11. Batch/expiry real implementation
+
+12. Purchase receive flow with batch/cost update
+
+13. Backup/restore
+
+14. User roles and cashier accounts
+
+15. Shift opening/closing
+
+16. Day closing report
+
+17. App-wide error boundary
+
+18. Form validation layer
+
+19. Build/lint/test cleanup
+
+20. Audit logs
+
+21. Receipt/invoice print reliability
+
+22. GST report real implementation
+
+23. Tally export real implementation
+
+24. Data import/export
+
+25. App settings and business profile stored in SQLite
+
+26. Role-based permissions
+
+27. App update/crash recovery strategy
+
+# keep expiring for later - Inventory EXPIRING mock card
+
+# Fast moving items or which item has more margin
+
+# Reverse Tax Calculation
+
+# Always add the HSN code to the item. It helps auto-fill the correct GST rate and makes future GST-rate updates easier. Old invoices keep their original tax snapshot; future invoices use the updated rate.

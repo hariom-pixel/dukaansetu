@@ -9,30 +9,36 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Package, Boxes, AlertTriangle, Clock, Search, Filter, Plus, Download, ArrowRightLeft, Pencil, Trash2 } from "lucide-react";
-import { POS_PRODUCTS, LOW_STOCK, EXPIRING, fmtINR, type Product } from "@/lib/mockData";
+import { fmtINR } from "@/lib/format";
+import { EXPIRING } from "@/lib/mockData";
 import { toast } from "sonner";
-import { getStockLedger, addStockLedgerEntry, createStockLedgerEntry } from "@/lib/stockLedger";
+import {
+  getRecentStockMovements,
+  addStockMovement,
+  type StockMovementRow,
+} from "@/services/stock-movement-db.service";
 import {
   getAllProducts,
   createProduct,
   updateProduct,
   updateProductStock,
-  debugProductStock,
   deleteProduct,
+  type ProductRow,
 } from "@/services/product-db.service";
 
 
-type InventoryProduct = Product & {
-  barcode?: string;
-  reorderLevel?: number;
-};
+type InventoryProduct = ProductRow;
 
 interface Form {
   sku: string;
   name: string;
   barcode: string;
   price: string;
+  costPrice: string;
   reorderLevel: string;
+  hsnCode: string;
+  gstRate: string;
+  taxInclusive: boolean;
 }
 
 const empty: Form = {
@@ -40,7 +46,11 @@ const empty: Form = {
   name: "",
   barcode: "",
   price: "",
+  costPrice: "",
   reorderLevel: "20",
+  hsnCode: "",
+  gstRate: "0",
+  taxInclusive: true,
 };
 
 export default function Inventory() {
@@ -54,6 +64,7 @@ export default function Inventory() {
   const [adjusting, setAdjusting] = useState<InventoryProduct | null>(null);
   const [adjustQty, setAdjustQty] = useState("");
   const [adjustReason, setAdjustReason] = useState("");
+  const [stockLedger, setStockLedger] = useState<StockMovementRow[]>([]);
 
   const filtered = products.filter((p) =>
     [p.name, p.sku, p.barcode ?? ""].some((s) =>
@@ -74,7 +85,11 @@ export default function Inventory() {
       name: p.name,
       barcode: p.barcode ?? "",
       price: String(p.price),
+      costPrice: String(p.costPrice ?? 0),
       reorderLevel: String(p.reorderLevel ?? 20),
+      hsnCode: p.hsnCode ?? "",
+      gstRate: String(p.gstRate ?? 0),
+      taxInclusive: Number(p.taxInclusive ?? 1) === 1,
     });
     setOpen(true);
   };
@@ -93,15 +108,21 @@ export default function Inventory() {
     }
 
     const price = Number(form.price) || 0;
+    const costPrice = Number(form.costPrice) || 0;
     const reorderLevel = Number(form.reorderLevel) || 20;
+    const gstRate = Number(form.gstRate) || 0;
 
     try {
       if (editing) {
         await updateProduct(Number(editing.id), {
           name: form.name,
           barcode: form.barcode.trim(),
+          hsnCode: form.hsnCode,
+          gstRate,
           price,
+          costPrice,
           reorderLevel,
+          taxInclusive: form.taxInclusive,
         });
 
         toast.success("Product updated");
@@ -115,7 +136,11 @@ export default function Inventory() {
           sku: form.sku,
           name: form.name,
           barcode: form.barcode.trim(),
+          hsnCode: form.hsnCode,
+          taxInclusive: form.taxInclusive,
+          gstRate,
           price,
+          costPrice,
           stock: 0,
           reorderLevel,
         });
@@ -160,17 +185,18 @@ export default function Inventory() {
     await loadProducts();
 
     // ADD STOCK LEDGER ENTRY
-    addStockLedgerEntry(
-      createStockLedgerEntry({
-        sku: adjusting.sku,
-        productName: adjusting.name,
-        qty: Math.abs(qty),
-        direction: qty > 0 ? "IN" : "OUT",
-        reason: "ADJUSTMENT",
-        refId: adjusting.id,
-        note: adjustReason || "Manual adjustment",
-      })
-    );
+    await addStockMovement({
+      productId: Number(adjusting.id),
+      sku: adjusting.sku,
+      productName: adjusting.name,
+      qty: Math.abs(qty),
+      direction: qty > 0 ? "IN" : "OUT",
+      reason: "ADJUSTMENT",
+      refId: adjusting.id,
+      note: adjustReason || "Manual adjustment",
+    });
+
+    await loadStockMovements();
 
     toast.success(
       `${adjusting.name} stock adjusted by ${qty > 0 ? "+" : ""}${qty}${
@@ -185,7 +211,6 @@ export default function Inventory() {
   };
 
   const stockValue = products.reduce((s, p) => s + p.price * p.stock, 0);
-  const stockLedger = getStockLedger().slice(0, 20);
 
   const lowCount = products.filter(
     (p) => p.stock <= Number(p.reorderLevel ?? 20)
@@ -196,8 +221,14 @@ export default function Inventory() {
     setProducts(rows as InventoryProduct[]);
   }
 
+  async function loadStockMovements() {
+    const rows = await getRecentStockMovements(20);
+    setStockLedger(rows);
+  }
+
   useEffect(() => {
     loadProducts().catch(console.error);
+    loadStockMovements().catch(console.error);
 
     const reloadInventory = () => {
       loadProducts().catch(console.error);
@@ -278,9 +309,18 @@ export default function Inventory() {
                               {p.barcode ? ` · ${p.barcode}` : ""}
                             </div>
                           </div>
+                           <div className="text-[10px] text-muted-foreground">
+                            HSN {p.hsnCode || "—"} · GST {Number(p.gstRate || 0)}% ·{" "}
+                            {Number(p.taxInclusive ?? 1) === 1 ? "Inclusive" : "Exclusive"}
+                          </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-right font-mono-num font-semibold">{fmtINR(p.price)}</td>
+                      <td className="px-4 py-3 text-right font-mono-num font-semibold">
+                        <div>{fmtINR(p.price)}</div>
+                        <div className="text-[10px] text-muted-foreground font-normal">
+                          cost {fmtINR(p.costPrice || 0)}
+                        </div>
+                      </td>
                       <td className={`px-4 py-3 text-right font-mono-num font-bold ${low ? "text-destructive" : ""}`}>
                         <div>{p.stock}</div>
                         <div className="text-[10px] text-muted-foreground font-normal">
@@ -497,15 +537,25 @@ export default function Inventory() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div className="grid gap-1.5">
-              <Label>Price (₹)</Label>
+              <Label>Selling price (₹)</Label>
               <Input
                 type="number"
                 value={form.price}
                 onChange={(e) => setForm({ ...form, price: e.target.value })}
               />
             </div>
+
+            <div className="grid gap-1.5">
+              <Label>Cost price (₹)</Label>
+              <Input
+                type="number"
+                value={form.costPrice}
+                onChange={(e) => setForm({ ...form, costPrice: e.target.value })}
+              />
+            </div>
+
             <div className="grid gap-1.5">
               <Label>Reorder level</Label>
               <Input
@@ -513,6 +563,51 @@ export default function Inventory() {
                 value={form.reorderLevel}
                 onChange={(e) => setForm({ ...form, reorderLevel: e.target.value })}
               />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1.5">
+                <Label>HSN code</Label>
+                <Input
+                  value={form.hsnCode}
+                  onChange={(e) => setForm({ ...form, hsnCode: e.target.value })}
+                  placeholder="e.g. 1006"
+                />
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label>GST rate</Label>
+                <select
+                  value={form.gstRate}
+                  onChange={(e) => setForm({ ...form, gstRate: e.target.value })}
+                  className="h-10 rounded-md border border-border bg-background px-3 text-sm"
+                >
+                  <option value="0">0%</option>
+                  <option value="3">3%</option>
+                  <option value="5">5%</option>
+                  <option value="12">12%</option>
+                  <option value="18">18%</option>
+                  <option value="28">28%</option>
+                </select>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                <div>
+                  <div className="text-sm font-medium">Tax inclusive price</div>
+                  <div className="text-xs text-muted-foreground">
+                    Turn on when selling price/MRP already includes GST
+                  </div>
+                </div>
+
+                <input
+                  type="checkbox"
+                  checked={form.taxInclusive}
+                  onChange={(e) =>
+                    setForm({ ...form, taxInclusive: e.target.checked })
+                  }
+                  className="h-4 w-4"
+                />
+              </div>
             </div>
           </div>
 

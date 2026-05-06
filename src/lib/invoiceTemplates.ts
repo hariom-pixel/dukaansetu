@@ -1,4 +1,4 @@
-import { fmtINR } from '@/lib/mockData'
+import { fmtINR } from '@/lib/format'
 import { SHOP } from '@/config/shop'
 
 export type ReceiptItem = {

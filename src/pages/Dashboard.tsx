@@ -25,7 +25,7 @@ import {
   YAxis,
   CartesianGrid,
 } from 'recharts'
-import { fmtINR } from '@/lib/mockData'
+import { fmtINR } from '@/lib/format'
 import { getDashboardStats } from '@/services/dashboard.service'
 import { getAllSales } from '@/services/sales-db.service'
 
@@ -102,7 +102,7 @@ export default function Dashboard() {
       ['Metric', 'Value'],
       ["Today's Sales", stats?.todaySales || 0],
       ["Today's Purchase", stats?.todayPurchase || 0],
-      ['Today Profit', (stats?.todaySales || 0) - (stats?.todayPurchase || 0)],
+      ['Today Profit', stats?.todayProfit || 0],
       ['Inventory Value', inventoryValue],
       ['Low Stock Items', stats?.lowStock?.length || 0],
       ['Customer Due', stats?.customerDue || 0],
@@ -268,10 +268,10 @@ export default function Dashboard() {
 
         <StatCard
           label='Today Profit'
-          value={fmtINR((stats?.todaySales || 0) - (stats?.todayPurchase || 0))}
+          value={fmtINR(stats?.todayProfit || 0)}
           icon={Wallet}
           delta={0}
-          hint='sales minus stock-in'
+          hint='gross profit from sold items'
           accent='success'
         />
 

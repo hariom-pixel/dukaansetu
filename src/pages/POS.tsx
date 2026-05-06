@@ -28,12 +28,10 @@ import {
   Printer,
   Share2,
 } from "lucide-react";
-import {
-  fmtINR,
-} from "@/lib/mockData";
+import { fmtINR } from "@/lib/format";
 import { type InvoiceTemplateKey } from "@/lib/invoiceTemplates";
 import { openPrintWindow, shareReceiptText } from "@/lib/receiptActions";
-import { useLocalStore, newId } from "@/hooks/useLocalStore";
+import { newId } from "@/hooks/useLocalStore";
 import {
   getHeldBills,
   saveHeldBill,
@@ -41,16 +39,22 @@ import {
   type HeldBillRow,
 } from "@/services/held-bill-db.service";
 import { toast } from "sonner";
-import { createJournalEntry } from "@/domain/accounting";
 import { createSale } from "@/services/pos-db.service";
-import { getAllProducts, getTopSellingProducts, debugProductStock, createProductFromBarcode, type ProductRow } from "@/services/product-db.service";
+import { getAllProducts, getTopSellingProducts, createProductFromBarcode, type ProductRow } from "@/services/product-db.service";
 import { getAllCustomers,findOrCreateCustomer, type CustomerRow } from "@/services/customer-db.service";
+import { getNextInvoiceNumber } from "@/services/invoice-sequence-db.service";
+
 
 interface CartItem {
   sku: string;
   name: string;
   price: number;
   qty: number;
+  hsnCode?: string | null;
+  gstRate?: number;
+  taxAmount?: number;
+  taxInclusive?: boolean;
+  taxableAmount?: number;
 }
 
 interface HeldBill {
@@ -88,8 +92,6 @@ type ReceiptState = {
 };
 
 export default function POS() {
-  const journalStore = useLocalStore("erp.journal", []);
-
 
   const [held, setHeld] = useState<HeldBill[]>([]);
 
@@ -102,7 +104,7 @@ export default function POS() {
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [gstMode, setGstMode] = useState<"with" | "without">("with");
-  const [gstRate, setGstRate] = useState(3);
+  const [gstRate, setGstRate] = useState(0);
   const [paymentMode, setPaymentMode] = useState<PaymentMode>("UPI");
   const [saleMode, setSaleMode] = useState<"paid" | "credit">("paid");
 
@@ -167,7 +169,18 @@ export default function POS() {
         return c.map((i) =>
           i.sku === p.sku ? { ...i, qty: i.qty + 1 } : i
         );
-      return [...c, { sku: p.sku, name: p.name, price: p.price, qty: 1 }];
+      return [
+        ...c,
+        {
+          sku: p.sku,
+          name: p.name,
+          price: p.price,
+          qty: 1,
+          hsnCode: p.hsnCode ?? null,
+          gstRate: Number(p.gstRate || 0),
+          taxInclusive: Number(p.taxInclusive ?? 1) === 1,
+        },
+      ];
     });
     setQuery("");
   };
@@ -208,16 +221,60 @@ export default function POS() {
 
     const discount = Math.min(Math.round(rawDiscount), subtotal);
 
-    const taxableAmount = Math.max(subtotal - discount, 0);
+  const lineBreakups = cart.map((item) => {
+    const lineAmount = item.price * item.qty;
 
-    const safeGstRate = Math.max(gstRate || 0, 0);
+    const discountShare =
+      subtotal > 0 ? (lineAmount / subtotal) * discount : 0;
 
-    const tax =
-      gstMode === "with"
-        ? Math.round((taxableAmount * safeGstRate) / 100)
-        : 0;
+    const afterDiscount = Math.max(lineAmount - discountShare, 0);
 
-    const total = taxableAmount + tax;
+    const itemGstRate = gstMode === "with" ? Number(item.gstRate || 0) : 0;
+    const isInclusive = Boolean(item.taxInclusive);
+
+    let taxableAmount = afterDiscount;
+    let taxAmount = 0;
+    let finalAmount = afterDiscount;
+
+    if (gstMode === "with" && itemGstRate > 0) {
+      if (isInclusive) {
+        taxableAmount = afterDiscount / (1 + itemGstRate / 100);
+        taxAmount = afterDiscount - taxableAmount;
+        finalAmount = afterDiscount;
+      } else {
+        taxableAmount = afterDiscount;
+        taxAmount = (taxableAmount * itemGstRate) / 100;
+        finalAmount = taxableAmount + taxAmount;
+      }
+    }
+
+    return {
+      sku: item.sku,
+      lineAmount,
+      discountShare,
+      taxableAmount: Math.round(taxableAmount * 100) / 100,
+      gstRate: itemGstRate,
+      taxAmount: Math.round(taxAmount * 100) / 100,
+      finalAmount: Math.round(finalAmount * 100) / 100,
+      taxInclusive: isInclusive,
+    };
+  });
+
+  const taxableAmount = lineBreakups.reduce(
+    (sum, line) => sum + line.taxableAmount,
+    0
+  );
+
+  const tax = lineBreakups.reduce(
+    (sum, line) => sum + line.taxAmount,
+    0
+  );
+
+  const total = Math.round(
+    lineBreakups.reduce((sum, line) => sum + line.finalAmount, 0)
+  );
+
+const safeGstRate = 0;
 
   const customerResults = useMemo(() => {
     const q = customerQuery.trim().toLowerCase();
@@ -246,8 +303,6 @@ export default function POS() {
       }
     }
 
-    const id = newId("INV");
-
     const customerId =
     currentCustomer.name !== "Walk-in"
     ? await findOrCreateCustomer({
@@ -256,10 +311,11 @@ export default function POS() {
       })
     : null;
 
+    let id = "";
+
     try {
-      await createSale(
+      id = await createSale(
         {
-          id,
           customerId,
           customerName: currentCustomer.name,
           customerPhone: currentCustomer.phone,
@@ -274,11 +330,22 @@ export default function POS() {
           paymentMode,
           saleMode,
         },
-        cart
+        cart.map((item) => {
+          const breakup = lineBreakups.find((l) => l.sku === item.sku);
+
+          return {
+            ...item,
+            gstRate: breakup?.gstRate ?? Number(item.gstRate || 0),
+            taxAmount: breakup?.taxAmount ?? 0,
+            taxableAmount: breakup?.taxableAmount ?? 0,
+            taxInclusive: breakup?.taxInclusive ?? Boolean(item.taxInclusive),
+            hsnCode: item.hsnCode ?? null,
+          };
+        })
       );
     } catch (error) {
       console.error(error);
-      toast.error("Failed to save bill");
+      toast.error(error instanceof Error ? error.message : "Failed to save bill");
       return;
     }
 
@@ -308,22 +375,12 @@ export default function POS() {
       paymentMode,
     });
 
-    if (saleMode === "paid") {
-      journalStore.add(
-        createJournalEntry(
-          `Sale ${id} · ${currentCustomer.name || "Walk-in"}`,
-          saleMode === "credit" ? total : 0,
-          saleMode === "paid" ? total : 0
-        )
-      );
-    }
-
     toast.success(`Bill ${id} created for ${fmtINR(total)}`);
 
     setDiscountValue(0);
     setDiscountType("percent");
     setGstMode("with");
-    setGstRate(3);
+    setGstRate(0);
     setPaymentMode("UPI");
     setCart([]);
     setCustomerName("");
@@ -556,6 +613,7 @@ export default function POS() {
         name,
         barcode: unknownBarcode,
         price,
+        costPrice: 0,
         stock,
         category: "General",
       });
@@ -857,25 +915,6 @@ export default function POS() {
                 <option value="without">Without GST</option>
               </select>
             </div>
-            {gstMode === "with" && (
-              <div className="mt-2">
-                <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
-                  GST rate
-                </div>
-                <select
-                  value={gstRate}
-                  onChange={(e) => setGstRate(Number(e.target.value))}
-                  className="w-full h-10 rounded-lg border border-border bg-background px-3 text-sm"
-                >
-                  <option value={0}>0%</option>
-                  <option value={3}>3%</option>
-                  <option value={12}>12%</option>
-                  <option value={18}>18%</option>
-                  <option value={28}>28%</option>
-                </select>
-              </div>
-            )}
-
             <div>
               <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
                 Sale mode
@@ -1012,7 +1051,7 @@ export default function POS() {
 
           <div className="space-y-2 text-sm mt-5 rounded-lg bg-secondary/25 p-3 border border-border/60">
             <div className="flex justify-between text-muted-foreground">
-              <span>Subtotal</span>
+              <span>Item total</span>
               <span className="font-mono-num">{fmtINR(subtotal)}</span>
             </div>
             <div className="flex justify-between text-success">
@@ -1023,7 +1062,13 @@ export default function POS() {
             </div>
             {gstMode === "with" && (
               <div className="flex justify-between text-muted-foreground">
-                <span>GST ({safeGstRate}%)</span>
+                <span>Taxable value</span>
+                <span className="font-mono-num">{fmtINR(taxableAmount)}</span>
+              </div>
+            )}
+            {gstMode === "with" && (
+              <div className="flex justify-between text-muted-foreground">
+                <span>GST included/added</span>
                 <span className="font-mono-num">+ {fmtINR(tax)}</span>
               </div>
             )}

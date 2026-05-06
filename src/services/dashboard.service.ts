@@ -55,6 +55,18 @@ export async function getDashboardStats() {
     [todayStart, tomorrowStart]
   )
 
+  const profitRows = await db.select<any[]>(
+    `
+    SELECT COALESCE(SUM(si.profit), 0) as total
+    FROM sale_items si
+    INNER JOIN sales s ON s.id = si.sale_id
+    WHERE s.created_at >= ?
+      AND s.created_at < ?
+      AND s.status NOT IN ('Voided', 'Returned')
+    `,
+    [todayStart, tomorrowStart]
+  )
+
   const customerDue = await db.select<any[]>(
     `
     SELECT COALESCE(SUM(due_amount), 0) as total
@@ -145,14 +157,13 @@ export async function getDashboardStats() {
       ? 100
       : 0
 
-  console.log('[DASHBOARD WEEKLY SALES]', weeklySales)
-
   return {
     todaySales,
     todayPurchase: Number(purchases[0]?.total || 0),
     customerDue: Number(customerDue[0]?.total || 0),
     supplierDue: Number(supplierDue[0]?.total || 0),
     inventoryValue: Number(inventory[0]?.total || 0),
+    todayProfit: Number(profitRows[0]?.total || 0),
     lowStock,
     topProducts,
     weeklySales,

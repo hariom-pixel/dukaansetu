@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Users, Heart, Sparkles, MessageCircle } from "lucide-react";
-import { fmtINR } from "@/lib/mockData";
+import { fmtINR } from "@/lib/format";
 import { toast } from "sonner";
 import {
   getAllCustomers,
@@ -26,6 +26,8 @@ import {
   type CustomerInvoiceRow,
   type CustomerLedgerRow,
 } from "@/services/customer-db.service";
+import { addJournalEntry } from "@/services/accounting-db.service";
+import { addPayment, getPaymentsByParty, type PaymentRow } from "@/services/payment-db.service";
 
 export default function Customers() {
   const [ledgerCustomer, setLedgerCustomer] = useState<CustomerRow | null>(null);
@@ -43,6 +45,7 @@ export default function Customers() {
   const [collectOpen, setCollectOpen] = useState(false);
   const [collectCustomer, setCollectCustomer] = useState<CustomerRow | null>(null);
   const [collectAmount, setCollectAmount] = useState("");
+  const [customerPayments, setCustomerPayments] = useState<PaymentRow[]>([]);
 
   async function loadCustomers() {
     const rows = await getAllCustomers();
@@ -72,8 +75,13 @@ export default function Customers() {
 
   const openProfile = async (customer: CustomerRow) => {
     setProfileCustomer(customer);
-    const rows = await getCustomerInvoicesFromDb(Number(customer.id));
+    const [rows, payments] = await Promise.all([
+      getCustomerInvoicesFromDb(Number(customer.id)),
+      getPaymentsByParty("CUSTOMER", customer.id),
+    ]);
+
     setProfileInvoices(rows);
+    setCustomerPayments(payments);
   };
 
   const openLedger = async (customer: CustomerRow) => {
@@ -132,11 +140,30 @@ export default function Customers() {
 
     try {
       const applied = await collectCustomerPayment(Number(collectCustomer.id), amt);
-
       if (applied <= 0) {
         toast.error("No outstanding dues found");
         return;
       }
+      await addJournalEntry({
+        desc: `Customer payment ${collectCustomer.name}`,
+        debit: 0,
+        credit: applied,
+        sourceType: "CUSTOMER_PAYMENT",
+        sourceId: String(collectCustomer.id),
+        isSystem: true,
+      });
+
+      await addPayment({
+        partyType: "CUSTOMER",
+        partyId: collectCustomer.id,
+        partyName: collectCustomer.name,
+        sourceType: "CUSTOMER_PAYMENT",
+        sourceId: collectCustomer.id,
+        amount: applied,
+        mode: "Cash",
+        direction: "IN",
+        note: `Customer payment from ${collectCustomer.name}`,
+      });
 
       toast.success(`Collected ${fmtINR(applied)} from ${collectCustomer.name}`);
 
@@ -468,6 +495,52 @@ export default function Customers() {
                               >
                                 {inv.status}
                               </Badge>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+              <Card className="border border-border/60 shadow-none overflow-hidden">
+                <div className="p-4 border-b border-border">
+                  <h3 className="font-semibold text-sm">Payment history</h3>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-secondary/50">
+                      <tr className="text-xs uppercase text-muted-foreground">
+                        <th className="text-left px-4 py-3">Date</th>
+                        <th className="text-left px-4 py-3">Mode</th>
+                        <th className="text-left px-4 py-3">Source</th>
+                        <th className="text-right px-4 py-3">Amount</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {customerPayments.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={4}
+                            className="px-4 py-8 text-center text-sm text-muted-foreground"
+                          >
+                            No payments recorded yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        customerPayments.map((p) => (
+                          <tr key={p.id} className="border-t border-border">
+                            <td className="px-4 py-3 text-xs text-muted-foreground">
+                              {p.date ? new Date(p.date).toLocaleString() : "—"}
+                            </td>
+                            <td className="px-4 py-3">{p.mode}</td>
+                            <td className="px-4 py-3 text-xs text-muted-foreground">
+                              {p.sourceType} {p.sourceId ? `· ${p.sourceId}` : ""}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono-num font-semibold">
+                              {fmtINR(p.amount)}
                             </td>
                           </tr>
                         ))

@@ -10,12 +10,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Truck, FileText, Wallet, Plus, ChevronRight, Star, Pencil, Trash2 } from "lucide-react";
-import { SUPPLIERS, PURCHASE_ORDERS, fmtINR, type PurchaseOrder, type Supplier } from "@/lib/mockData";
-import { useLocalStore, newId } from "@/hooks/useLocalStore";
+import { fmtINR } from "@/lib/format";
 import { toast } from "sonner";
-import { Product } from "@/lib/mockData";
-import { addStockLedgerEntry, createStockLedgerEntry } from "@/lib/stockLedger";
 import { getAllProducts, type ProductRow } from "@/services/product-db.service";
+import { addJournalEntry } from "@/services/accounting-db.service";
+import {
+  addPayment,
+  getPaymentsByParty,
+  type PaymentRow,
+} from "@/services/payment-db.service";
 import {
   getAllSuppliers,
   getAllPurchases,
@@ -25,7 +28,8 @@ import {
   paySupplier
 } from "@/services/purchase-db.service";
 
-type Status = PurchaseOrder["status"];
+type Status = "Draft" | "Approval" | "In transit" | "Delivered";
+
 type PurchaseLine = {
   sku: string;
   name: string;
@@ -33,7 +37,15 @@ type PurchaseLine = {
   price: number;
 };
 
-type PurchaseOrderEx = PurchaseOrder & {
+type PurchaseOrderEx = {
+  id: string;
+  supplier: string;
+  supplier_name?: string;
+  items: number;
+  value: number;
+  status: Status;
+  eta: string;
+  created_at?: number;
   lines?: PurchaseLine[];
 };
 
@@ -73,8 +85,9 @@ export default function Purchase() {
   const [paySupplierRow, setPaySupplierRow] = useState<any | null>(null);
   const [payAmount, setPayAmount] = useState("");
 
-  // const productsStore = useLocalStore<Product>("erp.products", []);
-  const journalStore = useLocalStore("erp.journal", []);
+  const [supplierHistoryOpen, setSupplierHistoryOpen] = useState(false);
+  const [historySupplier, setHistorySupplier] = useState<any | null>(null);
+  const [supplierPayments, setSupplierPayments] = useState<PaymentRow[]>([]);
 
 
   const openAdd = () => {
@@ -171,6 +184,20 @@ export default function Purchase() {
   };
 
   const payables = suppliers.reduce((s, x) => s + x.outstanding, 0);
+
+  async function openSupplierHistory(supplier: any) {
+    try {
+      setHistorySupplier(supplier);
+
+      const payments = await getPaymentsByParty("SUPPLIER", supplier.id);
+      setSupplierPayments(payments);
+
+      setSupplierHistoryOpen(true);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to load supplier payment history");
+    }
+  }
 
   async function loadPurchaseData() {
     const [poRows, supplierRows, productRows] = await Promise.all([
@@ -308,7 +335,16 @@ export default function Purchase() {
                   </div>
                 </div>
 
-                <div className="mt-3">
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => openSupplierHistory(s)}
+                  >
+                    History
+                  </Button>
+
                   <Button
                     size="sm"
                     variant="outline"
@@ -319,7 +355,7 @@ export default function Purchase() {
                       setPayOpen(true);
                     }}
                   >
-                    Pay supplier
+                    Pay
                   </Button>
                 </div>
               </div>
@@ -529,8 +565,35 @@ export default function Purchase() {
                 }
 
                 try {
-                  await paySupplier(Number(paySupplierRow.id), amt);
+                  const applied = await paySupplier(Number(paySupplierRow.id), amt);
+
+                  await addJournalEntry({
+                    desc: `Payment to ${paySupplierRow.name}`,
+                    debit: applied,
+                    credit: 0,
+                    sourceType: "SUPPLIER_PAYMENT",
+                    sourceId: String(paySupplierRow.id),
+                    isSystem: true,
+                  });
+
+                  await addPayment({
+                    partyType: "SUPPLIER",
+                    partyId: paySupplierRow.id,
+                    partyName: paySupplierRow.name,
+                    sourceType: "SUPPLIER_PAYMENT",
+                    sourceId: paySupplierRow.id,
+                    amount: applied,
+                    mode: "Cash",
+                    direction: "OUT",
+                    note: `Payment to supplier ${paySupplierRow.name}`,
+                  });
+
                   await loadPurchaseData();
+
+                  if (historySupplier?.id === paySupplierRow.id) {
+                    const payments = await getPaymentsByParty("SUPPLIER", paySupplierRow.id);
+                    setSupplierPayments(payments);
+                  }
 
                   toast.success("Payment recorded");
 
@@ -543,6 +606,131 @@ export default function Purchase() {
               }}
             >
               Pay
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={supplierHistoryOpen}
+        onOpenChange={(open) => {
+          setSupplierHistoryOpen(open);
+          if (!open) {
+            setHistorySupplier(null);
+            setSupplierPayments([]);
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              {historySupplier?.name} · Supplier history
+            </DialogTitle>
+            <DialogDescription>
+              Supplier payable and payment records from SQLite.
+            </DialogDescription>
+          </DialogHeader>
+
+          {historySupplier && (
+            <div className="grid gap-4 py-2">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                    Outstanding
+                  </div>
+                  <div className="font-mono-num font-bold text-lg">
+                    {fmtINR(historySupplier.outstanding || 0)}
+                  </div>
+                </Card>
+
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                    Payments
+                  </div>
+                  <div className="font-mono-num font-bold text-lg">
+                    {supplierPayments.length}
+                  </div>
+                </Card>
+
+                <Card className="p-4 border border-border/60 shadow-none">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                    Total paid
+                  </div>
+                  <div className="font-mono-num font-bold text-lg">
+                    {fmtINR(
+                      supplierPayments.reduce(
+                        (sum, p) => sum + Number(p.amount || 0),
+                        0
+                      )
+                    )}
+                  </div>
+                </Card>
+              </div>
+
+              <Card className="border border-border/60 shadow-none overflow-hidden">
+                <div className="p-4 border-b border-border">
+                  <h3 className="font-semibold text-sm">Payment history</h3>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-secondary/50">
+                      <tr className="text-xs uppercase text-muted-foreground">
+                        <th className="text-left px-4 py-3">Date</th>
+                        <th className="text-left px-4 py-3">Mode</th>
+                        <th className="text-left px-4 py-3">Source</th>
+                        <th className="text-left px-4 py-3">Note</th>
+                        <th className="text-right px-4 py-3">Amount</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {supplierPayments.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={5}
+                            className="px-4 py-10 text-center text-sm text-muted-foreground"
+                          >
+                            No supplier payments recorded yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        supplierPayments.map((p) => (
+                          <tr key={p.id} className="border-t border-border">
+                            <td className="px-4 py-3 text-xs text-muted-foreground">
+                              {p.date ? new Date(p.date).toLocaleString() : "—"}
+                            </td>
+
+                            <td className="px-4 py-3">{p.mode}</td>
+
+                            <td className="px-4 py-3 text-xs text-muted-foreground">
+                              {p.sourceType}
+                              {p.sourceId ? ` · ${p.sourceId}` : ""}
+                            </td>
+
+                            <td className="px-4 py-3 text-xs text-muted-foreground">
+                              {p.note || "—"}
+                            </td>
+
+                            <td className="px-4 py-3 text-right font-mono-num font-semibold text-destructive">
+                              - {fmtINR(p.amount)}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSupplierHistoryOpen(false)}
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
